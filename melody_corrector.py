@@ -521,6 +521,10 @@ def correct_midi_file(
     original_notes = []
     corrected_notes = []
     
+    # 跟踪每个原始音高对应的纠正后音高
+    # 使用字典存储: {原始音高: [纠正后音高列表]}（支持同一音高重叠）
+    pitch_mapping: dict[int, list[int]] = {}
+    
     # 创建新轨道
     target_track = mid.tracks[track]
     new_track = mido.MidiTrack()
@@ -532,14 +536,22 @@ def correct_midi_file(
             note = Note(pitch=msg.note, velocity=msg.velocity)
             corrected = corrector.correct_note(note)
             corrected_notes.append(corrected.pitch)
+            
+            # 记录原始音高到纠正后音高的映射
+            if msg.note not in pitch_mapping:
+                pitch_mapping[msg.note] = []
+            pitch_mapping[msg.note].append(corrected.pitch)
+            
             new_track.append(msg.copy(note=corrected.pitch))
         elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
-            # note_off 事件也需要更新音高
-            # 找到对应的原始音并替换
-            idx = len([n for n in new_track if n.type == 'note_on' and n.velocity > 0]) - 1
-            if idx >= 0 and idx < len(corrected_notes):
-                new_track.append(msg.copy(note=corrected_notes[idx]))
+            # note_off 事件：根据原始音高找到对应的纠正后音高
+            original_pitch = msg.note
+            if original_pitch in pitch_mapping and pitch_mapping[original_pitch]:
+                # 使用FIFO方式匹配（先开始的音符先结束）
+                corrected_pitch = pitch_mapping[original_pitch].pop(0)
+                new_track.append(msg.copy(note=corrected_pitch))
             else:
+                # 如果找不到映射，保持原样
                 new_track.append(msg.copy())
         else:
             new_track.append(msg.copy())
