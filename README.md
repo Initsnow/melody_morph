@@ -31,7 +31,7 @@ uv run python phrase_compressor.py input.mid -o output.mid -r 4
 uv run python counterpoint_generator.py input.mid -o output.mid --species 5
 
 # 文本转音乐：转换为五声调式对位乐曲
-uv run python text_to_midi.py "我好想做嘉然小姐的狗啊。可惜嘉然小姐喜欢的是猫，我哭了" -o quiet_night.mid
+uv run python text_to_midi.py "我好想做嘉然小姐的狗啊。可惜嘉然小姐喜欢的是猫，我哭了"
 ```
 
 ## 演示

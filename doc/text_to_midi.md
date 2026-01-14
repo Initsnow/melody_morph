@@ -18,7 +18,7 @@
 
 ```bash
 # 基本用法：将一段文字转换为 MIDI
-uv run python text_to_midi.py "床前明月光，疑是地上霜" -o output.mid
+uv run python text_to_midi.py "我好想做嘉然小姐的狗啊。可惜嘉然小姐喜欢的是猫，我哭了" -o output.mid
 
 # 指定文本文件作为输入
 uv run python text_to_midi.py poem.txt -o poem.mid
