@@ -17,8 +17,7 @@ Chord to Strings Converter - 将和弦音拆分为弦乐声部
 """
 
 import mido
-from dataclasses import dataclass, field
-from typing import Literal
+from dataclasses import dataclass
 from enum import Enum
 import os
 
@@ -424,7 +423,7 @@ def demo():
     
     # 创建配置
     config = StringsConfig(violins=2, violas=1, cellos=1)
-    print(f"\n弦乐配置:")
+    print("\n弦乐配置:")
     print(f"  Violins: {config.violins}")
     print(f"  Violas: {config.violas}")
     print(f"  Cellos: {config.cellos}")
@@ -432,7 +431,7 @@ def demo():
     
     # 显示乐器列表
     instruments = config.get_instrument_list()
-    print(f"\n乐器排列（从低到高）:")
+    print("\n乐器排列（从低到高）:")
     for i, inst in enumerate(instruments):
         low, high = INSTRUMENT_RANGES[inst]
         print(f"  {i}: {inst.value} ({pitch_to_name(low)} - {pitch_to_name(high)})")
@@ -451,7 +450,7 @@ def demo():
     converter = ChordToStringsConverter(config)
     assignments = converter.assign_to_instruments(chord)
     
-    print(f"\n分配结果:")
+    print("\n分配结果:")
     for inst_idx, notes in assignments.items():
         inst = instruments[inst_idx]
         if notes:
@@ -567,7 +566,7 @@ def cli():
     print(f"输入文件: {args.input}")
     print(f"输出文件: {output_path}")
     print(f"源轨道: {args.track}")
-    print(f"\n弦乐配置:")
+    print("\n弦乐配置:")
     print(f"  Violins: {config.violins}")
     print(f"  Violas: {config.violas}")
     print(f"  Cellos: {config.cellos}")
@@ -586,7 +585,7 @@ def cli():
             source_track=args.track
         )
         
-        print(f"\n转换完成!")
+        print("\n转换完成!")
         print(f"  处理和弦数: {stats['num_chords']}")
         print(f"  输出轨道数: {stats['num_tracks']}")
         print(f"  各轨道音符数: {dict(zip(stats['instruments'], stats['notes_per_track']))}")

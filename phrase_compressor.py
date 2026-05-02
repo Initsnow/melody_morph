@@ -10,7 +10,6 @@ MIDI Phrase Compressor - 将MIDI乐句进行时间压缩（等比例缩放）
 
 import mido
 from dataclasses import dataclass
-from typing import Literal
 import os
 
 
@@ -289,7 +288,7 @@ def demo():
         NoteEvent(pitch=72, velocity=100, start_tick=1440, duration_ticks=480),   # C5 at beat 4
     ]
     
-    print(f"\n原始音符（假设 480 ticks/beat）:")
+    print("\n原始音符（假设 480 ticks/beat）:")
     for note in test_notes:
         beat = note.start_tick / 480 + 1
         print(f"  {pitch_to_name(note.pitch)}: 第{beat:.0f}拍, 时值={note.duration_ticks}ticks")
@@ -298,7 +297,7 @@ def demo():
     compressor = PhraseCompressor(compression_ratio=2.0)
     compressed = compressor.compress_notes(test_notes)
     
-    print(f"\n2倍压缩后:")
+    print("\n2倍压缩后:")
     for note in compressed:
         beat = note.start_tick / 480 + 1
         print(f"  {pitch_to_name(note.pitch)}: 第{beat:.1f}拍, 时值={note.duration_ticks}ticks")
@@ -307,7 +306,7 @@ def demo():
     compressor = PhraseCompressor(compression_ratio=4.0)
     compressed = compressor.compress_notes(test_notes)
     
-    print(f"\n4倍压缩后:")
+    print("\n4倍压缩后:")
     for note in compressed:
         beat = note.start_tick / 480 + 1
         print(f"  {pitch_to_name(note.pitch)}: 第{beat:.2f}拍, 时值={note.duration_ticks}ticks")
@@ -430,7 +429,7 @@ def cli():
             source_track=args.track,
         )
         
-        print(f"\n压缩完成!")
+        print("\n压缩完成!")
         print(f"  总音符数: {stats['note_count']}")
         print(f"  原始时长: {stats['original_beats']:.1f} 拍 ({stats['original_duration_ticks']} ticks)")
         print(f"  压缩后时长: {stats['compressed_beats']:.1f} 拍 ({stats['compressed_duration_ticks']} ticks)")
