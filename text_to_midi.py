@@ -1,9 +1,7 @@
 import mido
 import argparse
-import hashlib
 import sys
 import os
-from typing import List, Dict, Optional
 
 # Ensure we can import counterpoint_generator from the same directory
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))

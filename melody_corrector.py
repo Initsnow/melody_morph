@@ -439,7 +439,7 @@ def demo():
     ]
     
     print(f"\n原始旋律: {[pitch_to_name(n.pitch) for n in test_melody]}")
-    print(f"时间分布: 8个音符横跨4拍（1小节）")
+    print("时间分布: 8个音符横跨4拍（1小节）")
     
     # 测试基础纠正方法
     methods = [
@@ -504,10 +504,10 @@ def demo():
     c_major = [60, 64, 67]  # C, E, G
     a_minor = [69, 72, 76]  # A, C, E (A4, C5, E5)
     
-    print(f"\n和弦进行:")
+    print("\n和弦进行:")
     print(f"  第1个周期: C大调 {[pitch_to_name(p) for p in c_major]}")
     print(f"  第2个周期: A小调 {[pitch_to_name(p) for p in a_minor]}")
-    print(f"  然后循环...")
+    print("  然后循环...")
     
     for period_beats in [2.0, 1.0]:
         period_desc = "每2拍切换和弦" if period_beats == 2.0 else "每拍切换和弦"
@@ -822,7 +822,7 @@ def correct_midi_file(
     
     # 打印统计
     changed = sum(1 for o, c in zip(original_notes, corrected_notes) if o != c)
-    print(f"\n纠正完成!")
+    print("\n纠正完成!")
     print(f"  总音符数: {len(original_notes)}")
     print(f"  已纠正: {changed}")
     print(f"  未改变: {len(original_notes) - changed}")
