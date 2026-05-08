@@ -10,7 +10,6 @@ MIDI 旋律处理工具集 - 用于音乐制作中的旋律修改、和弦分配
 | `chord_to_strings.py` | 将和弦拆分到弦乐声部 | [文档](doc/chord_to_strings.md) |
 | `phrase_compressor.py` | 乐句时间压缩/扩展 | [文档](doc/phrase_compressor.md) |
 | `counterpoint_generator.py` | 根据旋律生成严格对位法旋律 | [文档](doc/counterpoint_generator.md) |
-| `text_to_midi.py` | 文本转旋律（五声音阶+对位伴奏） | [文档](doc/text_to_midi.md) |
 
 ## 快速开始
 
@@ -29,9 +28,6 @@ uv run python phrase_compressor.py input.mid -o output.mid -r 4
 
 # 对位生成：为旋律生成五类对位（花样对位）
 uv run python counterpoint_generator.py input.mid -o output.mid --species 5
-
-# 文本转音乐：转换为五声调式对位乐曲
-uv run python text_to_midi.py "我好想做嘉然小姐的狗啊。可惜嘉然小姐喜欢的是猫，我哭了"
 ```
 
 ## 演示
@@ -51,7 +47,6 @@ uv run python melody_corrector.py --help
 uv run python chord_to_strings.py --help
 uv run python phrase_compressor.py --help
 uv run python counterpoint_generator.py --help
-uv run python text_to_midi.py --help
 ```
 
 ## 说明
