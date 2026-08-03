@@ -7,7 +7,7 @@
 
 原理:
 
-1. 用 :mod:`gp_parser` 解析文件，提取指定轨道的音符与时值。
+1. 用 :mod:`gpchords.parser` 解析文件，提取指定轨道的音符与时值。
 2. 确定调性：优先使用 GP 文件里的调号；没有调号时用
    Krumhansl-Kessler 键感轮廓估计。
 3. 在每个分析窗口内收集音级（按音符时值加权），对 21 种和弦模板
@@ -23,19 +23,19 @@
 用法::
 
     # 默认：交互选择轨道，按小节识别并自动写回 <原名>_chords.gp
-    uv run python annotate_chords.py "xxx.gp"
+    uv run gp-chords "xxx.gp"
 
     # 指定轨道，按小节标注 Lead Guitar
-    uv run python annotate_chords.py "xxx.gp" --track "Lead Guitar"
+    uv run gp-chords "xxx.gp" --track "Lead Guitar"
 
     # 按节拍标注，并输出 JSON
-    uv run python annotate_chords.py "xxx.gp" --track 0 --window beat --out chords.json
+    uv run gp-chords "xxx.gp" --track 0 --window beat --out chords.json
 
     # 只看分析结果，不写回；--debug 输出每个小节的明细
-    uv run python annotate_chords.py "xxx.gp" --track "Lead Guitar" --no-write --debug
+    uv run gp-chords "xxx.gp" --track "Lead Guitar" --no-write --debug
 
     # 不依赖具体文件，看算法演示
-    uv run python annotate_chords.py --demo
+    uv run gp-chords --demo
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from gp_parser import (
+from gpchords.parser import (
     GPSong,
     GuitarProError,
     GPBeat,
@@ -973,7 +973,7 @@ def run_analysis(args) -> list[dict]:
 
 def demo() -> None:
     """不依赖文件，用示例音符演示和弦识别。"""
-    from gp_parser import GPNote
+    from gpchords.parser import GPNote
 
     def n(midi: int, dur: float = 1.0) -> GPNote:
         name = _SHARP_NAMES[midi % 12] + str(midi // 12 - 1)

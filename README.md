@@ -11,9 +11,7 @@ MIDI 旋律处理工具集 - 用于音乐制作中的旋律修改、和弦分配
 | `phrase_compressor.py` | 乐句时间压缩/扩展 | [文档](doc/phrase_compressor.md) |
 | `counterpoint_generator.py` | 根据旋律生成严格对位法旋律 | [文档](doc/counterpoint_generator.md) |
 | `midi_to_ust.py` | MIDI 旋律转调内唱名 UST | [文档](doc/midi_to_ust.md) |
-| `gp_parser.py` | 解析 Guitar Pro (.gp/.gpx) 文件 | [文档](doc/gp_parser.md) |
-| `gp_info.py` | 查看 GP 文件轨道/音符/和弦标注 | [文档](doc/gp_parser.md) |
-| `annotate_chords.py` | 从 GP 文件自动识别并标注和弦 | [文档](doc/gp_parser.md) |
+| `gpchords/` | Guitar Pro 解析与和弦自动标注（`gp-chords` 命令） | [文档](doc/gp_parser.md) |
 
 ## 快速开始
 
@@ -43,20 +41,14 @@ uv run python midi_to_ust.py input.mid -o output.ust --key Am --lyrics zh
 # 默认自动识别调性（读 MIDI 调号，读不到则估计）
 uv run python midi_to_ust.py input.mid -o output.ust
 
-# 查看 Guitar Pro 文件概览
-uv run python gp_parser.py "song.gp"
-
-# 查看 Lead Guitar 的每个小节音符与和弦
-uv run python gp_info.py "song.gp" --track "Lead Guitar"
-
-# 自动标注和弦：交互选择轨道 -> 识别 -> 自动写回 <原名>_chords.gp
-uv run python annotate_chords.py "song.gp"
+# 自动标注和弦：交互选择轨道 -> 识别 -> 自动写回 <原名>_chords.gp（原文件不变）
+uv run gp-chords "song.gp"
 
 # 指定轨道；--no-write 不写回，--debug 输出小节明细
-uv run python annotate_chords.py "song.gp" --track "Lead Guitar" --out chords.json
+uv run gp-chords "song.gp" --track "Lead Guitar" --no-write --debug
 
-# 与手工标注对照
-uv run python annotate_chords.py "song.gp" --track "Lead Guitar" --no-write --debug
+# 查看文件内部结构（调试用）
+uv run gp-info "song.gp" --track "Lead Guitar"
 ```
 
 ## 演示
@@ -67,6 +59,7 @@ uv run python annotate_chords.py "song.gp" --track "Lead Guitar" --no-write --de
 uv run python melody_corrector.py --demo
 uv run python chord_to_strings.py --demo
 uv run python phrase_compressor.py --demo
+uv run gp-chords --demo
 ```
 
 ## 帮助
@@ -77,6 +70,7 @@ uv run python chord_to_strings.py --help
 uv run python phrase_compressor.py --help
 uv run python counterpoint_generator.py --help
 uv run python midi_to_ust.py --help
+uv run gp-chords --help
 ```
 
 ## 说明

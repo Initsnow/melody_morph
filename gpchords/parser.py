@@ -8,13 +8,9 @@ Guitar Pro (.gp / .gpx) 解析器
 GP3 / GP4 / GP5 是另一种二进制格式，不在本模块支持范围内。旧格式请使用
 PyGuitarPro（``uv add PyGuitarPro``），本模块检测到旧格式时会给出提示。
 
-命令行用法::
-
-    uv run python gp_parser.py "xxx.gp"
-
 作为库使用::
 
-    from gp_parser import parse_gp
+    from gpchords import parse_gp
     song = parse_gp("xxx.gp")
     for track in song.tracks:
         print(track.name, len(track.notes))

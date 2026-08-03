@@ -5,13 +5,13 @@
 用法::
 
     # 轨道概览
-    uv run python gp_info.py "xxx.gp"
+    uv run gp-info "xxx.gp"
 
     # 查看某个轨道每个小节的音符与和弦标注
-    uv run python gp_info.py "xxx.gp" --track "Lead Guitar"
+    uv run gp-info "xxx.gp" --track "Lead Guitar"
 
     # 只查看有和弦标注的小节
-    uv run python gp_info.py "xxx.gp" --track "Lead Guitar" --chords
+    uv run gp-info "xxx.gp" --track "Lead Guitar" --chords
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from gp_parser import GuitarProError, parse_gp, select_track
+from gpchords.parser import GuitarProError, parse_gp, select_track
 
 
 def print_summary(song) -> None:

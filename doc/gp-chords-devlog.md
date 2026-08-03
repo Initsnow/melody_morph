@@ -183,9 +183,10 @@ xml_text = re.sub(
 ## 最终成果
 
 ```text
-gp_parser.py         # GP7/8 解析器（纯标准库）
-gp_info.py           # 查看工具
-annotate_chords.py   # 自动识别 + 写回
+gpchords/
+├── parser.py        # GP7/8 解析器（纯标准库，库不提供用户命令）
+├── info.py          # 内部查看工具（`uv run gp-info`，调试用）
+└── annotate.py      # 自动识别 + 写回（`uv run gp-chords`，用户入口）
 doc/gp_parser.md     # 格式与实现文档
 ```
 

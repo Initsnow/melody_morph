@@ -10,7 +10,7 @@ PyGuitarPro 明确只支持 GP3-5；AlphaTab（C#/JS）虽支持更多格式但�
 因此对 `.gp` 这类格式，自写解析器是合理选择——它的数据不是晦涩的二进制，
 而是 **zip 压缩包 + 一份 XML（`Content/score.gpif`）**，解析门槛很低。
 
-本仓库的 `gp_parser.py` 就是针对这一格式的实现（GP6 的 `.gpx` 结构相同，也可解析）。
+本仓库的 `gpchords.parser` 就是针对这一格式的实现（GP6 的 `.gpx` 结构相同，也可解析）。
 检测到 GP3-5 时它会给出提示并建议使用 PyGuitarPro，而不是报一个莫名其妙的错。
 
 ## 格式原理
@@ -43,13 +43,13 @@ GPIF
   每项是一个 `Item id="N" name="C/F"`，内含和弦构成（根音/低音/音级）与指板图。
 - **拍上的引用**：`Beat > Chord` 是 CDATA 数字，指向该轨道和弦库的第 N 项。
 
-`gp_parser.py` 把这两层都解出来：`GPTrack.chords` 是和弦库，
+`gpchords.parser` 把这两层都解出来：`GPTrack.chords` 是和弦库，
 `GPBeat.chord` 是具体某一拍挂的和弦。
 
 ## 解析器 API
 
 ```python
-from gp_parser import parse_gp, detect_format, select_track
+from gpchords import parse_gp, select_track, detect_format
 
 fmt, version = detect_format("song.gp")      # ("gp", "7.0")
 song = parse_gp("song.gp")
@@ -72,52 +72,50 @@ for measure in track.measures:
 
 ## 命令行
 
-### 查看文件概览
-
-```bash
-uv run python gp_parser.py "song.gp"
-```
+`gpchords` 包提供两个命令：`gp-chords`（自动标注，用户入口）和 `gp-info`
+（查看内部结构，调试用）。解析器本身是纯库（`from gpchords import parse_gp`），
+不提供用户命令。
 
 ### 查看轨道内容
 
 ```bash
 # 轨道一览
-uv run python gp_info.py "song.gp"
+uv run gp-info "song.gp"
 
 # 查看 Lead Guitar 每个小节的音符与和弦
-uv run python gp_info.py "song.gp" --track "Lead Guitar"
+uv run gp-info "song.gp" --track "Lead Guitar"
 
 # 只看有和弦标注的小节
-uv run python gp_info.py "song.gp" --track "Lead Guitar" --chords
+uv run gp-info "song.gp" --track "Lead Guitar" --chords
 ```
 
 ### 自动标注和弦
 
 ```bash
 # 默认：交互选择轨道 -> 按小节识别 -> 自动写回 <原名>_chords.gp（原文件不变）
-uv run python annotate_chords.py "song.gp"
+uv run gp-chords "song.gp"
 
 # 指定轨道
-uv run python annotate_chords.py "song.gp" --track "Lead Guitar"
+uv run gp-chords "song.gp" --track "Lead Guitar"
 
 # 按节拍识别，结果存 JSON
-uv run python annotate_chords.py "song.gp" --track 0 --window beat --out chords.json
+uv run gp-chords "song.gp" --track 0 --window beat --out chords.json
 
 # 指定写回路径；或只看分析结果、不写回
-uv run python annotate_chords.py "song.gp" --track "Lead Guitar" --write out.gp
-uv run python annotate_chords.py "song.gp" --track "Lead Guitar" --no-write
+uv run gp-chords "song.gp" --track "Lead Guitar" --write out.gp
+uv run gp-chords "song.gp" --track "Lead Guitar" --no-write
 
 # 输出每个小节的识别明细（默认不打印）
-uv run python annotate_chords.py "song.gp" --track "Lead Guitar" --no-write --debug
+uv run gp-chords "song.gp" --track "Lead Guitar" --no-write --debug
 
 # 已有手工标注的小节默认保留；--overwrite 时也写入/替换
-uv run python annotate_chords.py "song.gp" --track "Lead Guitar" --overwrite --write
+uv run gp-chords "song.gp" --track "Lead Guitar" --overwrite --write
 
 # 指定调性 / 理论风格（不做强力/斜杠收敛）
-uv run python annotate_chords.py "song.gp" --key "Am" --style theory
+uv run gp-chords "song.gp" --key "Am" --style theory
 
 # 不依赖文件，看算法演示
-uv run python annotate_chords.py --demo
+uv run gp-chords --demo
 ```
 
 ## 和弦识别算法
