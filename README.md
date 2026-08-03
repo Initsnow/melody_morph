@@ -11,6 +11,7 @@ MIDI 旋律处理工具集 - 用于音乐制作中的旋律修改、和弦分配
 | `phrase_compressor.py` | 乐句时间压缩/扩展 | [文档](doc/phrase_compressor.md) |
 | `counterpoint_generator.py` | 根据旋律生成严格对位法旋律 | [文档](doc/counterpoint_generator.md) |
 | `key_transposer.py` | 按音阶位置转调（非简单移调） | [文档](doc/key_transposer.md) |
+| `midi_to_ust.py` | MIDI 旋律转调内唱名 UST | [文档](doc/midi_to_ust.md) |
 
 ## 快速开始
 
@@ -29,6 +30,16 @@ uv run python phrase_compressor.py input.mid -o output.mid -r 4
 
 # 对位生成：为旋律生成五类对位（花样对位）
 uv run python counterpoint_generator.py input.mid -o output.mid --species 5
+
+# MIDI 转调内唱名 UST（C 大调，日文假名唱名，默认）
+uv run python midi_to_ust.py input.mid -o output.ust --key C
+
+# 英文 / 中文唱名
+uv run python midi_to_ust.py input.mid -o output.ust --key C --lyrics en
+uv run python midi_to_ust.py input.mid -o output.ust --key Am --lyrics zh
+
+# 默认自动识别调性（读 MIDI 调号，读不到则估计）
+uv run python midi_to_ust.py input.mid -o output.ust
 ```
 
 ## 演示
@@ -48,6 +59,8 @@ uv run python melody_corrector.py --help
 uv run python chord_to_strings.py --help
 uv run python phrase_compressor.py --help
 uv run python counterpoint_generator.py --help
+uv run python key_transposer.py --help
+uv run python midi_to_ust.py --help
 ```
 
 ## 说明
