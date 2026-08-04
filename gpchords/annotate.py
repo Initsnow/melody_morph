@@ -4,6 +4,9 @@
 
 解析 Guitar Pro (.gp / .gpx) 文件，按和弦变化自动切窗（也可固定按
 小节 / 半小节 / 节拍）识别和弦，并可与文件里手工标注的和弦进行对照。
+支持多轨道：默认每轨单独分析、单独标注；``--merge`` 可将所选轨道按
+小节/拍位合并音符后识别一次（和弦拆在多轨、或需要贝斯补低音时），
+写回时默认第一个分析轨道，``--write-tracks all`` 可写回全部分析轨道。
 
 原理:
 
@@ -27,6 +30,15 @@
 
     # 指定轨道，按小节标注 Lead Guitar
     uv run gp-chords "xxx.gp" --track "Lead Guitar"
+
+    # 多轨道：每轨单独分析、单独标注
+    uv run gp-chords "xxx.gp" --track "Lead Guitar,Rhythm Guitar"
+
+    # 合并多轨音符识别（和弦拆在两轨/需要贝斯补低音），默认写回第一轨
+    uv run gp-chords "xxx.gp" --track "Lead Guitar,Rhythm Guitar" --merge
+
+    # 合并识别并写回全部分析轨道（各轨和弦库/指板图按各自调弦生成）
+    uv run gp-chords "xxx.gp" --track all --merge --write-tracks all --no-write
 
     # 按节拍标注，并输出 JSON
     uv run gp-chords "xxx.gp" --track 0 --window beat --out chords.json
@@ -65,7 +77,7 @@ from gpchords.parser import (
     GPNote,
     GPTrack,
     parse_gp,
-    select_track,
+    select_tracks,
 )
 
 # ---------------------------------------------------------------------------
@@ -695,6 +707,75 @@ SEGMENTERS = {
 }
 
 
+def merge_tracks(tracks: list[GPTrack]) -> GPTrack:
+    """
+    按小节/拍位合并多轨音符为一个合成轨道（用于多轨和弦识别）。
+
+    - 同一起始位置的拍合并：音符拼接、时值取最长、拍信息（id/声部/位置）
+      取第一个轨道（primary）的拍——写回时按 primary 锚定；
+    - primary 在该位置没有拍时，拍信息取其余轨道的拍（锚点随后由
+      :func:`reanchor_results` 映射回目标轨道）；
+    - 小节元信息（拍号/调号/段落）与手工和弦标注取自 primary。
+    """
+    if len(tracks) == 1:
+        return tracks[0]
+    primary = tracks[0]
+    merged = GPTrack(
+        id=primary.id,
+        name=" + ".join(t.name for t in tracks),
+        short_name="+".join(t.short_name or t.name for t in tracks),
+        program=primary.program,
+        midi_program=primary.midi_program,
+        tuning=primary.tuning,
+        chords=primary.chords,
+    )
+    by_bar: dict[int, list[GPMeasure]] = {}
+    for t in tracks:
+        for m in t.measures:
+            by_bar.setdefault(m.index, []).append(m)
+    for index in sorted(by_bar):
+        measures = by_bar[index]
+        pm = measures[0]
+        merged_measure = GPMeasure(
+            index=index,
+            time_signature=pm.time_signature,
+            key_signature=pm.key_signature,
+            section=pm.section,
+        )
+        buckets: dict[float, list[GPBeat]] = {}
+        order: list[float] = []
+        for m in measures:
+            for b in m.beats:
+                key = round(b.start_quarters, 4)
+                if key not in buckets:
+                    buckets[key] = []
+                    order.append(key)
+                buckets[key].append(b)
+        order.sort()
+        for key in order:
+            group = buckets[key]
+            notes = [n for b in group for n in b.notes]
+            if not notes:
+                continue
+            anchor = group[0]  # primary 有拍时必是 group[0]（按轨道顺序遍历）
+            merged_measure.beats.append(
+                GPBeat(
+                    id=anchor.id,
+                    start_quarters=key,
+                    duration_quarters=max(b.duration_quarters for b in group),
+                    chord=anchor.chord,
+                    notes=notes,
+                    voice_id=anchor.voice_id,
+                    position_in_voice=anchor.position_in_voice,
+                )
+            )
+        merged_measure.beats.sort(key=lambda b: b.start_quarters)
+        merged.measures.append(merged_measure)
+        for b in merged_measure.beats:
+            merged.notes.extend(b.notes)
+    return merged
+
+
 def resolve_key(song, track: GPTrack, override: Optional[str]) -> tuple[int, str]:
     """确定调性：--key > 文件调号 > Krumhansl-Kessler 估计。"""
     if override:
@@ -1102,6 +1183,82 @@ def _restore_cdata(xml_text: str, pairs: list[tuple[str, str]]) -> str:
     return xml_text
 
 
+def _find_anchor_beat(
+    measure: Optional[GPMeasure], result: dict
+) -> Optional[GPBeat]:
+    """在目标轨道的小节里找挂和弦的拍：优先窗口起始拍，否则窗口内首拍。"""
+    if measure is None:
+        return None
+    beats = [b for b in measure.beats if b.notes]
+    if not beats:
+        return None
+    start = result.get("start_quarters", 0.0)
+    end = start + result.get("duration_quarters", 0.0)
+    exact = [b for b in beats if abs(b.start_quarters - start) < 1e-3]
+    if exact:
+        return exact[0]
+    inside = [
+        b
+        for b in beats
+        if b.start_quarters >= start - 1e-3 and b.start_quarters <= end + 1e-3
+    ]
+    return min(inside, key=lambda b: b.start_quarters) if inside else None
+
+
+def reanchor_results(
+    results: list[dict],
+    track: GPTrack,
+    measures_by_bar: Optional[dict[int, GPMeasure]] = None,
+) -> list[dict]:
+    """
+    把分析结果锚点映射到目标轨道（多轨写回用）。
+
+    合并分析产生的锚点指向 primary 轨道；写回其他轨道时，按
+    (小节, 窗口位置) 在目标轨道找对应拍并替换锚点。目标轨道在该小节
+    窗口内没有音符时锚点置空，写回时自动跳过该窗口。
+    """
+    if measures_by_bar is None:
+        measures_by_bar = {m.index: m for m in track.measures}
+    out = []
+    for r in results:
+        r2 = dict(r)
+        beat = _find_anchor_beat(measures_by_bar.get(r.get("bar")), r)
+        if beat is not None:
+            r2["anchor_beat_id"] = beat.id
+            r2["anchor_voice_id"] = beat.voice_id
+            r2["anchor_pos"] = beat.position_in_voice
+        else:
+            r2["anchor_beat_id"] = None
+            r2["anchor_voice_id"] = None
+            r2["anchor_pos"] = -1
+        out.append(r2)
+    return out
+
+
+def resolve_write_tracks(
+    song: GPSong,
+    analysis_tracks: list[GPTrack],
+    selectors: Optional[list[str]],
+    default_all: bool,
+) -> list[GPTrack]:
+    """
+    解析写回轨道：默认第一个分析轨道；``all`` = 全部分析轨道；
+    其他按 :func:`select_tracks` 规则选择，且必须是分析轨道之一。
+    """
+    if not selectors:
+        return analysis_tracks if default_all else analysis_tracks[:1]
+    if any(part.strip().lower() == "all" for sel in selectors for part in sel.split(",")):
+        return analysis_tracks
+    targets = select_tracks(song, selectors)
+    analyzed_ids = {t.id for t in analysis_tracks}
+    for t in targets:
+        if t.id not in analyzed_ids:
+            raise GuitarProError(
+                f"写回轨道 [{t.id}] {t.name} 不在分析轨道内，请先通过 --track 选择"
+            )
+    return targets
+
+
 def write_chords_to_gp(
     input_path: str,
     output_path: str,
@@ -1281,66 +1438,60 @@ def write_chords_to_gp(
 # ---------------------------------------------------------------------------
 
 
-def prompt_track(song: GPSong) -> GPTrack:
-    """未指定 --track 时交互选择轨道；非交互环境退化为第一个轨道。"""
-    if len(song.tracks) == 1:
-        return song.tracks[0]
+def prompt_tracks(song: GPSong) -> list[GPTrack]:
+    """未指定 --track 时交互选择轨道；非交互环境退化为第一个有音符的轨道。"""
+    candidates = [t for t in song.tracks if t.notes] or [song.tracks[0]]
+    if len(candidates) == 1:
+        return [candidates[0]]
     if not sys.stdin.isatty():
-        print(f"轨道: [0] {song.tracks[0].name}（未指定 --track，非交互环境取第一个）")
-        return song.tracks[0]
+        print(f"轨道: [0] {candidates[0].name}（未指定 --track，非交互环境取第一个）")
+        return [candidates[0]]
     print("可用轨道:")
     for t in song.tracks:
         chords = ", ".join(c.name for c in t.chords) or "无"
         print(f"  [{t.id}] {t.name:<28} 音符 {len(t.notes):>5}  和弦库: {chords}")
     while True:
         try:
-            selector = input("选择轨道（编号或名称，回车默认 0）: ").strip()
+            selector = input(
+                "选择轨道（编号/名称；逗号分隔多个；all=全部；回车取第一个）: "
+            ).strip()
         except EOFError:  # 非交互输入流
             print("未读到输入，取第一个轨道。")
-            return song.tracks[0]
+            return [candidates[0]]
         if not selector:
-            return song.tracks[0]
+            return [candidates[0]]
         try:
-            return select_track(song, selector)
+            return select_tracks(song, [selector])
         except GuitarProError as e:
             print(f"  {e}，请重新选择")
 
 
-def run_analysis(args) -> list[dict]:
-    song = parse_gp(args.file)
-    if args.track:
-        try:
-            track = select_track(song, args.track)
-        except GuitarProError as e:
-            print(f"错误: {e}", file=sys.stderr)
-            sys.exit(1)
-    else:
-        track = prompt_track(song)
-
+def _key_for_track(
+    song: GPSong, track: GPTrack, args
+) -> tuple[tuple[int, str], dict[int, tuple[int, str]]]:
+    """每个分析窗口的调性：--key 强制全局；否则默认每小节自己的调号
+    （无调号回退全局）；--key-per-section 时无调号的小节回退段落调性
+    （段落调内覆盖率过低时用 K-K 自动估计），有小节调号时仍以小节调号为准。"""
     global_key = resolve_key(song, track, args.key)
-    key_root, key_mode = global_key
-    if args.key is None:
-        print(
-            f"调性: {pc_name(key_root, key_root)}{'m' if key_mode == 'Minor' else ''} "
-            "(全局；转调段按各小节调号，可用 --key 覆盖)"
-        )
-    else:
-        print(f"调性: {pc_name(key_root, key_root)}{'m' if key_mode == 'Minor' else ''} (--key 指定)")
-
-    # 每个分析窗口的调性：--key 强制全局；否则默认每小节自己的调号
-    # （无调号回退全局）；--key-per-section 时无调号的小节回退段落调性
-    # （段落调内覆盖率过低时用 K-K 自动估计），有小节调号时仍以小节调号为准。
     if args.key:
         keys_by_bar = {m.index: global_key for m in track.measures}
     elif args.key_per_section:
         section_keys = resolve_section_keys(track, global_key)
-        keys_by_bar = {m.index: measure_key(m, section_keys[m.section]) for m in track.measures}
-        print(f"调性模式: 按段落（{len(section_keys)} 个段落）")
+        keys_by_bar = {
+            m.index: measure_key(m, section_keys[m.section]) for m in track.measures
+        }
     else:
         keys_by_bar = {m.index: measure_key(m, global_key) for m in track.measures}
-        print("调性模式: 每小节调号（无调号回退全局）")
+    return global_key, keys_by_bar
 
-    segmenter = SEGMENTERS[args.window]
+
+def _analyze_measures(
+    track: GPTrack,
+    keys_by_bar: dict[int, tuple[int, str]],
+    segmenter,
+    args,
+) -> list[dict]:
+    """对单个（或合并后的）轨道执行切窗 + 和弦识别。"""
     results = []
     measures = track.measures
     for mi, measure in enumerate(measures):
@@ -1365,60 +1516,76 @@ def run_analysis(args) -> list[dict]:
                     "manual": seg.manual,
                 }
             )
+    return results
 
-    print(f"轨道: [{track.id}] {track.name}  窗口: {args.window}  风格: {args.style}")
-    if args.debug:
-        print(f"{'小节':>4}  {'窗口':<10} {'自动和弦':<12} {'音符':<32} 手动")
-        print("-" * 86)
-        for r in results:
-            chord = r["chord"]
-            weights = chord["weights"] if chord else {}
-            pcs = " ".join(f"{k}:{v:g}" for k, v in weights.items()) if weights else "-"
-            print(
-                f"{r['bar']:>4}  {r['window']:<10} {(chord['name'] if chord else '-'):<12} "
-                f"{pcs:<32} {r['manual'] or ''}"
-            )
-    print(f"共分析 {len(results)} 个窗口。")
 
-    if not args.no_compare:
-        rows = compare_manual(track, keys_by_bar, args.style)
-        print_comparison(rows)
+def _print_debug(results: list[dict], args) -> None:
+    if not args.debug:
+        return
+    print(f"{'小节':>4}  {'窗口':<10} {'自动和弦':<12} {'音符':<32} 手动")
+    print("-" * 86)
+    for r in results:
+        chord = r["chord"]
+        weights = chord["weights"] if chord else {}
+        pcs = " ".join(f"{k}:{v:g}" for k, v in weights.items()) if weights else "-"
+        print(
+            f"{r['bar']:>4}  {r['window']:<10} {(chord['name'] if chord else '-'):<12} "
+            f"{pcs:<32} {r['manual'] or ''}"
+        )
 
-    if args.out:
-        payload = {
-            "file": args.file,
-            "track": {"id": track.id, "name": track.name},
-            "key": f"{pc_name(key_root, key_root)}{'m' if key_mode == 'Minor' else ''}",
-            "window": args.window,
-            "style": args.style,
-            "results": results,
-            "manual_comparison": compare_manual(track, keys_by_bar, args.style),
-        }
-        with open(args.out, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        print(f"已保存: {args.out}")
 
+def _print_key(key_root: int, key_mode: str, args) -> None:
+    if args.key is None:
+        print(
+            f"调性: {pc_name(key_root, key_root)}{'m' if key_mode == 'Minor' else ''} "
+            "(全局；转调段按各小节调号，可用 --key 覆盖)"
+        )
+    else:
+        print(
+            f"调性: {pc_name(key_root, key_root)}{'m' if key_mode == 'Minor' else ''} "
+            "(--key 指定)"
+        )
+
+
+def _write_back(
+    args, song: GPSong, tracks: list[GPTrack], track_results: dict[int, list[dict]],
+    write_keys: dict[int, int], merged_results: Optional[list[dict]],
+    merged_key_root: Optional[int],
+) -> None:
+    """写回 .gp：默认分析模式写全部分析轨道，合并模式写第一个分析轨道。"""
     if args.no_write:
         print("未写回 .gp（--no-write）。")
+        return
+    if args.write == "__default__":
+        output_path = str(Path(args.file).with_name(Path(args.file).stem + "_chords.gp"))
     else:
-        if args.write == "__default__":
-            output_path = str(Path(args.file).with_name(Path(args.file).stem + "_chords.gp"))
+        output_path = args.write
+    if Path(output_path).resolve() == Path(args.file).resolve():
+        print("错误: 输出文件与输入文件相同，请用 --write 指定其他路径", file=sys.stderr)
+        sys.exit(1)
+    default_all = merged_results is None
+    targets = resolve_write_tracks(song, tracks, args.write_tracks, default_all=default_all)
+    current_input = args.file
+    for target in targets:
+        if merged_results is not None:
+            measures_by_bar = {m.index: m for m in target.measures}
+            target_results = reanchor_results(merged_results, target, measures_by_bar)
+            key_root = merged_key_root
         else:
-            output_path = args.write
-        if Path(output_path).resolve() == Path(args.file).resolve():
-            print("错误: 输出文件与输入文件相同，请用 --write 指定其他路径", file=sys.stderr)
-            sys.exit(1)
+            target_results = track_results[target.id]
+            key_root = write_keys[target.id]
         stats = write_chords_to_gp(
-            args.file,
+            current_input,
             output_path,
             song,
-            track,
-            results,
+            target,
+            target_results,
             key_root,
             overwrite=args.overwrite,
         )
+        current_input = output_path
         print(
-            f"\n写回完成: {output_path}\n"
+            f"\n写回完成: {output_path}（轨道 [{target.id}] {target.name}）\n"
             f"  新写入和弦: {stats['written']} 处 | 和弦库新增: {stats['new_chords']} 个"
             f"（库内共 {stats['total_chords_in_library']} 个）\n"
             f"  共享拍克隆: {stats.get('cloned', 0)} 个 | "
@@ -1426,7 +1593,125 @@ def run_analysis(args) -> list[dict]:
             f"跳过已有和弦的拍: {stats['skipped_existing']}\n"
             f"  验证通过：输出文件中带和弦标注的拍: {stats['annotated_beats']}"
         )
-    return results
+
+
+def run_analysis(args) -> list[dict]:
+    song = parse_gp(args.file)
+    if args.track:
+        try:
+            tracks = select_tracks(song, args.track)
+        except GuitarProError as e:
+            print(f"错误: {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        tracks = prompt_tracks(song)
+
+    segmenter = SEGMENTERS[args.window]
+    primary = tracks[0]
+
+    if args.merge:
+        # 合并模式：多轨音符合并后识别一次（和弦拆在多轨/需要贝斯补低音时）
+        analysis_track = merge_tracks(tracks)
+        global_key, keys_by_bar = _key_for_track(song, analysis_track, args)
+        key_root, key_mode = global_key
+        _print_key(key_root, key_mode, args)
+        if not args.key and args.key_per_section:
+            print(f"调性模式: 按段落（{len(set(m.section for m in analysis_track.measures))} 个段落）")
+        elif not args.key:
+            print("调性模式: 每小节调号（无调号回退全局）")
+        results = _analyze_measures(analysis_track, keys_by_bar, segmenter, args)
+        print(
+            "轨道: "
+            + " + ".join(f"[{t.id}] {t.name}" for t in tracks)
+            + f"  窗口: {args.window}  风格: {args.style}"
+        )
+        _print_debug(results, args)
+        print(f"共分析 {len(results)} 个窗口。")
+        comparison = []
+        if not args.no_compare:
+            comparison = compare_manual(analysis_track, keys_by_bar, args.style)
+            print_comparison(comparison)
+
+        if args.out:
+            payload = {
+                "file": args.file,
+                "merged": True,
+                "tracks": [{"id": t.id, "name": t.name} for t in tracks],
+                "track": {"id": primary.id, "name": primary.name},  # 兼容旧字段
+                "key": f"{pc_name(key_root, key_root)}{'m' if key_mode == 'Minor' else ''}",
+                "window": args.window,
+                "style": args.style,
+                "results": results,
+                "manual_comparison": comparison,
+            }
+            with open(args.out, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            print(f"已保存: {args.out}")
+
+        _write_back(
+            args, song, tracks, {}, {primary.id: key_root},
+            merged_results=results, merged_key_root=key_root,
+        )
+        return results
+
+    # 分析模式（默认）：每个轨道单独分析、单独标注
+    track_results: dict[int, list[dict]] = {}
+    write_keys: dict[int, int] = {}
+    payload_tracks: list[dict] = []
+    last_results: list[dict] = []
+    for track in tracks:
+        global_key, keys_by_bar = _key_for_track(song, track, args)
+        key_root, key_mode = global_key
+        _print_key(key_root, key_mode, args)
+        if not args.key and args.key_per_section:
+            print(f"调性模式: 按段落（{len(set(m.section for m in track.measures))} 个段落）")
+        elif not args.key:
+            print("调性模式: 每小节调号（无调号回退全局）")
+        results = _analyze_measures(track, keys_by_bar, segmenter, args)
+        print(f"轨道: [{track.id}] {track.name}  窗口: {args.window}  风格: {args.style}")
+        _print_debug(results, args)
+        print(f"共分析 {len(results)} 个窗口。")
+        comparison = []
+        if not args.no_compare:
+            comparison = compare_manual(track, keys_by_bar, args.style)
+            print_comparison(comparison)
+        track_results[track.id] = results
+        write_keys[track.id] = key_root
+        last_results = results
+        payload_tracks.append(
+            {
+                "id": track.id,
+                "name": track.name,
+                "key": f"{pc_name(key_root, key_root)}{'m' if key_mode == 'Minor' else ''}",
+                "results": results,
+                "manual_comparison": comparison,
+            }
+        )
+
+    if args.out:
+        payload: dict = {
+            "file": args.file,
+            "merged": False,
+            "tracks": payload_tracks,
+            "window": args.window,
+            "style": args.style,
+        }
+        if len(tracks) == 1:
+            # 兼容旧字段
+            payload.update(
+                {
+                    "track": {"id": primary.id, "name": primary.name},
+                    "key": payload_tracks[0]["key"],
+                    "results": payload_tracks[0]["results"],
+                    "manual_comparison": payload_tracks[0]["manual_comparison"],
+                }
+            )
+        with open(args.out, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        print(f"已保存: {args.out}")
+
+    _write_back(args, song, tracks, track_results, write_keys, None, None)
+    return last_results
 
 
 def demo() -> None:
@@ -1454,12 +1739,26 @@ def demo() -> None:
 
 
 def main() -> None:
+    # Windows GBK 控制台打印轨道名（可能含 × 等字符）会抛 UnicodeEncodeError
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     parser = argparse.ArgumentParser(
         description="从 Guitar Pro 文件自动识别并标注和弦",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("file", nargs="?", help=".gp / .gpx 文件路径（--demo 时不需要）")
-    parser.add_argument("--track", default=None, help="轨道名称或索引（不指定时交互选择）")
+    parser.add_argument(
+        "--track", action="append", default=None, metavar="TRACK",
+        help="分析轨道，可多个（逗号分隔或重复 --track；all=全部非鼓轨道；"
+        "默认每轨单独分析单独标注；不指定时交互选择）",
+    )
+    parser.add_argument(
+        "--merge", action="store_true",
+        help="合并所选轨道音符后识别一次（和弦拆在多轨/需要贝斯补低音时）",
+    )
     parser.add_argument(
         "--window", choices=["auto", "measure", "half", "beat"], default="auto",
         help="分析窗口：auto=按和弦变化切窗（默认），measure/half/beat=固定窗口",
@@ -1480,6 +1779,11 @@ def main() -> None:
         help="写回路径（默认自动写 <原名>_chords.gp，--no-write 关闭）",
     )
     parser.add_argument("--no-write", action="store_true", help="不写回 .gp（只分析/输出 JSON）")
+    parser.add_argument(
+        "--write-tracks", action="append", default=None, metavar="TRACK",
+        help="写回轨道（分析模式默认全部分析轨道；合并模式默认第一个分析轨道；"
+        "all=全部分析轨道；可逗号分隔或重复）",
+    )
     parser.add_argument("--debug", action="store_true", help="输出每个小节的识别明细")
     parser.add_argument(
         "--overwrite", action="store_true",

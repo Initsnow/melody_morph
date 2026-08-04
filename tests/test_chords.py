@@ -15,15 +15,30 @@ import pytest
 from gpchords.annotate import (
     CHORD_TEMPLATES,
     DEGREES,
+    _analyze_measures,
+    _key_for_track,
     detect_chord,
     measure_key,
+    merge_tracks,
     note_weights,
+    reanchor_results,
     resolve_key,
     resolve_section_keys,
+    resolve_write_tracks,
     segment_auto,
     segment_measure,
 )
-from gpchords.parser import GPBeat, GPMeasure, GPNote, parse_gp
+from gpchords.parser import (
+    GPSong,
+    GPBeat,
+    GPMeasure,
+    GPNote,
+    GPTrack,
+    GuitarProError,
+    parse_gp,
+    select_tracks,
+)
+from gpchords.annotate import SEGMENTERS
 
 SAMPLE_FILE = Path(
     os.environ.get("GP_TEST_FILE", r"C:\Users\Initsnow\Documents\Audio\谱\无论如何 - 副本.gp")
@@ -66,6 +81,24 @@ def measure(index: int, beats: list[GPBeat], key: str | None = None) -> GPMeasur
     return GPMeasure(index=index, time_signature=(4, 4), key_signature=key, beats=beats)
 
 
+def track(id_: int, name: str, measures: list[GPMeasure]) -> GPTrack:
+    t = GPTrack(id=id_, name=name, tuning=[40, 45, 50, 55, 59, 64])
+    t.measures = measures
+    for m in measures:
+        for b in m.beats:
+            t.notes.extend(b.notes)
+    return t
+
+
+def make_song() -> GPSong:
+    drum = track(0, "Drum", [measure(1, [beat(0.0, [(36, 1.0)])])])
+    drum.midi_program = 0  # 鼓组
+    silent = track(1, "Silent", [measure(1, [])])
+    guitar = track(2, "Guitar", [measure(1, [beat(0.0, [(48, 1.0), (52, 1.0)])])])
+    bass = track(3, "Bass", [measure(1, [beat(0.0, [(43, 1.0)])])])
+    return GPSong(tracks=[drum, silent, guitar, bass])
+
+
 def names(segments: list) -> list[str]:
     out = []
     for seg in segments:
@@ -75,6 +108,92 @@ def names(segments: list) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+
+
+def test_select_tracks_multi_and_all():
+    song = make_song()
+    assert [t.id for t in select_tracks(song, ["2,3"])] == [2, 3]
+    # all：排除鼓组（MIDI Program 0）与无音符轨道
+    assert [t.id for t in select_tracks(song, ["all"])] == [2, 3]
+    # 重复选择去重
+    assert [t.id for t in select_tracks(song, ["2", "2,3"])] == [2, 3]
+    with pytest.raises(GuitarProError):
+        select_tracks(song, ["不存在的轨道"])
+
+
+def test_merge_tracks_combines_simultaneous_notes():
+    # 吉他只弹 C+E（大三度双音无法定和弦），贝斯补 G 后才能识别为 C/G
+    g = track(0, "Guitar", [measure(1, [beat(0.0, [(48, 1.0), (52, 1.0)])])])
+    b = track(4, "Bass", [measure(1, [beat(0.0, [(43, 2.0)])])])
+    merged = merge_tracks([g, b])
+    assert merged is not g
+    mb = merged.measures[0].beats[0]
+    assert sorted(n.midi for n in mb.notes) == [43, 48, 52]
+    assert mb.duration_quarters == 2.0  # 时值取最长
+    r = detect_chord(mb.notes, 0, "Major", "guitar")
+    assert r is not None and r["name"] == "C/G"
+    # 锚点取自 primary（吉他轨的拍）
+    assert mb.voice_id == "v1" and mb.position_in_voice == 0
+
+
+def test_merge_tracks_keeps_separate_positions():
+    g = track(
+        0, "Guitar",
+        [measure(1, [beat(0.0, [(48, 1.0)]), beat(0.5, [(50, 1.0)])])],
+    )
+    b = track(4, "Bass", [measure(1, [beat(0.0, [(43, 2.0)])])])
+    merged = merge_tracks([g, b])
+    beats = merged.measures[0].beats
+    assert [x.start_quarters for x in beats] == [0.0, 0.5]
+    assert [len(x.notes) for x in beats] == [2, 1]
+
+
+def test_merge_tracks_borrows_anchor_when_primary_silent():
+    g = track(0, "Guitar", [measure(1, [beat(2.0, [(48, 1.0)])])])
+    b = track(4, "Bass", [measure(1, [beat(0.0, [(43, 1.0)])])])
+    merged = merge_tracks([g, b])
+    beats = merged.measures[0].beats
+    assert [x.start_quarters for x in beats] == [0.0, 2.0]
+    assert beats[0].voice_id == "v1"  # primary 该位置无拍，借用贝斯拍信息
+
+
+def test_reanchor_results_maps_to_target_track():
+    primary = track(0, "G", [measure(1, [beat(0.0, [(48, 1.0)]), beat(2.0, [(50, 1.0)])])])
+    secondary = track(
+        4, "B",
+        [measure(1, [beat(0.0, [(43, 1.0)])]), measure(2, [beat(0.0, [(45, 1.0)])])],
+    )
+    results = [
+        {"bar": 1, "start_quarters": 0.0, "duration_quarters": 1.0},
+        {"bar": 1, "start_quarters": 2.0, "duration_quarters": 1.0},
+        {"bar": 2, "start_quarters": 0.0, "duration_quarters": 1.0},
+    ]
+    out = reanchor_results(results, secondary)
+    assert out[0]["anchor_voice_id"] == "v1" and out[0]["anchor_pos"] == 0
+    assert out[1]["anchor_voice_id"] is None  # 目标轨小节 1 在 2.0 没有音符
+    assert out[2]["anchor_pos"] == 0
+
+
+def test_resolve_write_tracks():
+    song = make_song()
+    analyzed = [song.tracks[2], song.tracks[3]]
+    assert [t.id for t in resolve_write_tracks(song, analyzed, None, default_all=True)] == [2, 3]
+    assert [t.id for t in resolve_write_tracks(song, analyzed, None, default_all=False)] == [2]
+    assert [t.id for t in resolve_write_tracks(song, analyzed, ["all"], default_all=False)] == [2, 3]
+    with pytest.raises(GuitarProError):
+        resolve_write_tracks(song, analyzed, ["0"], default_all=True)  # 鼓轨未分析
+
+
+def test_analyze_measures_flow():
+    from types import SimpleNamespace
+
+    t = track(0, "G", [measure(1, [beat(0.0, [(48, 2.0), (52, 2.0), (55, 2.0)])])])
+    args = SimpleNamespace(
+        min_notes=1, style="guitar", key=None, key_per_section=False
+    )
+    _, keys = _key_for_track(None, t, args)
+    results = _analyze_measures(t, keys, SEGMENTERS["measure"], args)
+    assert results and results[0]["chord"]["name"] == "C"
 # 第 2 步：已知失败用例 + 调性极小破平
 # ---------------------------------------------------------------------------
 

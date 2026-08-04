@@ -98,6 +98,16 @@ uv run gp-chords "song.gp"
 # 指定轨道
 uv run gp-chords "song.gp" --track "Lead Guitar"
 
+# 多轨道：每轨单独分析、单独标注（--write-tracks 可指定写回哪些分析轨道）
+uv run gp-chords "song.gp" --track "Lead Guitar,Rhythm Guitar"
+uv run gp-chords "song.gp" --track all --no-write
+uv run gp-chords "song.gp" --track "Lead Guitar,Rhythm Guitar" --write-tracks "Lead Guitar"
+
+# 合并多轨音符识别：和弦拆在两轨、或需要贝斯补低音时；
+# 默认写回第一个分析轨道，--write-tracks all 写回全部分析轨道
+uv run gp-chords "song.gp" --track "Lead Guitar,Electric Bass" --merge
+uv run gp-chords "song.gp" --track all --merge --write-tracks all
+
 # 按节拍识别，结果存 JSON
 uv run gp-chords "song.gp" --track 0 --window beat --out chords.json
 

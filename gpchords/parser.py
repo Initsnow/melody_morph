@@ -203,6 +203,41 @@ def select_track(song: "GPSong", selector: str) -> Optional["GPTrack"]:
     )
 
 
+def select_tracks(song: "GPSong", selectors: "str | list[str]") -> list["GPTrack"]:
+    """
+    按索引/名称选择多个轨道（顺序保留、去重）。
+
+    - 单个 selector 可逗号分隔（``--track 0,2``、``--track "Lead,Rhythm"``）；
+    - 关键字 ``all`` 选择所有有音符且非鼓组（MIDI Program 0）的轨道，
+      避免打击乐污染和弦识别；
+    - 空选择抛 :class:`GuitarProError`。
+    """
+    if isinstance(selectors, str):
+        selectors = [selectors]
+    tracks: list[GPTrack] = []
+    seen: set[int] = set()
+    for selector in selectors:
+        for part in selector.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if part.lower() == "all":
+                for t in song.tracks:
+                    if not t.notes or t.midi_program == 0:
+                        continue
+                    if t.id not in seen:
+                        seen.add(t.id)
+                        tracks.append(t)
+                continue
+            t = select_track(song, part)
+            if t.id not in seen:
+                seen.add(t.id)
+                tracks.append(t)
+    if not tracks:
+        raise GuitarProError("没有选择任何轨道")
+    return tracks
+
+
 def parse_gp(path: str | Path) -> GPSong:
     """解析 Guitar Pro 文件并返回 :class:`GPSong`。"""
     fmt, version = detect_format(path)

@@ -47,6 +47,15 @@ uv run gp-chords "song.gp"
 # 指定轨道；默认按和弦变化自动切窗（--window auto），--no-write 不写回
 uv run gp-chords "song.gp" --track "Lead Guitar" --no-write --debug
 
+# 多轨道：每轨单独分析、单独标注（可逗号分隔或重复 --track，all=全部非鼓轨道）
+uv run gp-chords "song.gp" --track "Lead Guitar,Rhythm Guitar"
+uv run gp-chords "song.gp" --track all --no-write
+
+# 合并多轨音符识别（和弦拆在两轨 / 需要贝斯补低音），默认写回第一轨；
+# --write-tracks all 写回全部分析轨道
+uv run gp-chords "song.gp" --track "Lead Guitar,Electric Bass" --merge
+uv run gp-chords "song.gp" --track "Lead Guitar,Rhythm Guitar" --merge --write-tracks all
+
 # 固定按小节/半小节/节拍切窗；转调谱默认逐小节读调号，也可按段落调性
 uv run gp-chords "song.gp" --window measure
 uv run gp-chords "song.gp" --key-per-section

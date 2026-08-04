@@ -11,6 +11,7 @@ from gpchords.parser import (
     detect_format,
     parse_gp,
     select_track,
+    select_tracks,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "detect_format",
     "parse_gp",
     "select_track",
+    "select_tracks",
 ]
