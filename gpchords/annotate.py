@@ -292,9 +292,14 @@ def _bass_name(
     """低音音名：优先按和弦度数拼写（C7/A# -> C7/Bb），否则按调性。"""
     if bass_pc == root_pc:
         return pc_name(root_pc, key_root)
-    return _degree_name(root_pc, quality, bass_pc, key_root) or pc_name(
-        bass_pc, key_root
-    )
+    name = _degree_name(root_pc, quality, bass_pc, key_root)
+    if name is None:
+        return pc_name(bass_pc, key_root)
+    # 双升/双降度数（如 E7#9 的 #9 低音拼成 F##）在 GP 记法里读起来怪异，
+    # 实际弹奏/显示的也是等音（G），这里回退到调性拼写。
+    if "##" in name or "bb" in name:
+        return pc_name(bass_pc, key_root)
+    return name
 
 
 def detect_chord(
@@ -1276,17 +1281,6 @@ def write_chords_to_gp(
     - 每个分析窗口挂到该窗口的第一个有音符的拍上。
     - 已有手工标注的小节默认跳过（--overwrite 时强制覆盖）。
     """
-    needed: list[dict] = []
-    seen_names: set[str] = set()
-    for r in results:
-        chord = r.get("chord")
-        if chord is None or chord["name"] in seen_names:
-            continue
-        seen_names.add(chord["name"])
-        needed.append(chord)
-
-    existing = {c.name: i for i, c in enumerate(track.chords)}
-
     with zipfile.ZipFile(input_path) as zin:
         zin_infos = zin.infolist()
         file_data = {i.filename: zin.read(i.filename) for i in zin_infos}
@@ -1310,25 +1304,6 @@ def write_chords_to_gp(
     if coll_el is None:
         raise GuitarProError(f"轨道 {track.name} 没有 DiagramCollection，无法写入和弦")
 
-    # 分配新和弦的和弦库索引（追加在现有项之后）
-    item_count = sum(1 for it in list(coll_el) if it.tag == "Item")
-    name_to_index = dict(existing)
-    new_names: list[str] = []
-    for chord in needed:
-        if chord["name"] in name_to_index:
-            continue
-        name_to_index[chord["name"]] = item_count
-        new_names.append(chord["name"])
-        item_count += 1
-
-    for name in new_names:
-        chord = next(c for c in needed if c["name"] == name)
-        coll_el.append(_build_chord_item(name_to_index[name], chord, track.tuning, key_root))
-        if working_el is not None:
-            working_item = _build_chord_item(None, chord, track.tuning, key_root)
-            working_el.append(working_item)
-
-    # --- 写拍引用 ----------------------------------------------------------
     # GPIF 的 beat 对象是全局复用的（同一个 riff 拍被几十上百个位置引用），
     # 而带和弦的 beat 从不复用。因此目标拍若被多处引用，必须先克隆一个新的
     # beat 并把该位置的引用替换过去，否则和弦会泄漏到所有复用位置。
@@ -1345,7 +1320,10 @@ def write_chords_to_gp(
     numeric_ids = [int(i) for i in beat_els if i.isdigit()]
     next_beat_id = max(numeric_ids) + 1 if numeric_ids else len(beat_els) + 1
 
-    written = skipped_manual = skipped_existing = missing = cloned = 0
+    # 第一遍：先决定哪些窗口真的会写入（跳过的不会进和弦库），
+    # 避免"全部被跳过"时仍往 DiagramCollection 追加一堆无人引用的死项。
+    writable: list[tuple[dict, ET.Element, int, str, ET.Element]] = []
+    skipped_manual = skipped_existing = missing = 0
     for r in results:
         chord = r.get("chord")
         if chord is None or not r.get("anchor_voice_id") or r.get("anchor_pos", -1) < 0:
@@ -1374,7 +1352,40 @@ def write_chords_to_gp(
         if not overwrite and beat_el.find("Chord") is not None:
             skipped_existing += 1
             continue
+        writable.append((r, voice_el, pos, current_id, beat_el))
 
+    # 只给实际写入的和弦建库项（同名复用已有项）
+    needed: list[dict] = []
+    seen_names: set[str] = set()
+    for r, *_ in writable:
+        chord = r["chord"]
+        if chord["name"] in seen_names:
+            continue
+        seen_names.add(chord["name"])
+        needed.append(chord)
+
+    existing = {c.name: i for i, c in enumerate(track.chords)}
+    item_count = sum(1 for it in list(coll_el) if it.tag == "Item")
+    name_to_index = dict(existing)
+    new_names: list[str] = []
+    for chord in needed:
+        if chord["name"] in name_to_index:
+            continue
+        name_to_index[chord["name"]] = item_count
+        new_names.append(chord["name"])
+        item_count += 1
+
+    for name in new_names:
+        chord = next(c for c in needed if c["name"] == name)
+        coll_el.append(_build_chord_item(name_to_index[name], chord, track.tuning, key_root))
+        if working_el is not None:
+            working_item = _build_chord_item(None, chord, track.tuning, key_root)
+            working_el.append(working_item)
+
+    # --- 写拍引用 ----------------------------------------------------------
+    written = cloned = 0
+    for r, voice_el, pos, current_id, beat_el in writable:
+        beats_tokens = (voice_el.findtext("Beats") or "").split()
         if len(usage.get(current_id, [])) > 1:
             # 共享 beat：克隆一份，替换本位置引用
             new_id = str(next_beat_id)
@@ -1390,7 +1401,7 @@ def write_chords_to_gp(
             beat_el = new_beat
             cloned += 1
 
-        _set_beat_chord(beat_el, name_to_index[chord["name"]])
+        _set_beat_chord(beat_el, name_to_index[r["chord"]["name"]])
         written += 1
 
     # 写新 zip：逐项保留原文件的压缩方式与时间戳，GP8 对 zip 容器结构敏感

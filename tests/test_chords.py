@@ -513,6 +513,18 @@ def test_13_requires_eleventh():
     assert result["name"] == "C9"
 
 
+def test_slash_bass_double_sharp_spelled_naturally():
+    # E7#9 的 #9 低音是 G（理论度数拼写 F##），GP 记法应写成 E7#9/G
+    result = detect([43, 52, 56, 59, 62], key_root=9, key_mode="Major")
+    assert result is not None and result["name"] == "E7#9/G"
+
+
+def test_slash_bass_flat_degree_kept():
+    # 单降/单升度数拼写保留（C7/Bb 不因新规则回退成 A#）
+    result = detect([46, 48, 52, 55], key_root=0, key_mode="Major")
+    assert result["name"] == "C7/Bb"
+
+
 def test_no_aliases_duplicated():
     # 去别名：不保留 M7/69/mM7 等重复写法
     suffixes = [s for _, s in CHORD_TEMPLATES.values()]
