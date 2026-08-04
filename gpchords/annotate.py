@@ -2,18 +2,18 @@
 自动和弦标注脚本
 ================
 
-解析 Guitar Pro (.gp / .gpx) 文件，按小节（或半小节 / 节拍）自动识别和弦，
-并可与文件里手工标注的和弦进行对照。
+解析 Guitar Pro (.gp / .gpx) 文件，按和弦变化自动切窗（也可固定按
+小节 / 半小节 / 节拍）识别和弦，并可与文件里手工标注的和弦进行对照。
 
 原理:
 
 1. 用 :mod:`gpchords.parser` 解析文件，提取指定轨道的音符与时值。
-2. 确定调性：优先使用 GP 文件里的调号；没有调号时用
-   Krumhansl-Kessler 键感轮廓估计。
-3. 在每个分析窗口内收集音级（按音符时值加权），对 21 种和弦模板
-   （大/小/属/挂留/强力和弦等）打分：
-   命中音加分、非和弦音扣分、缺失和弦音扣分，并给予「调内根音」
-   和「低音等于根音」小幅加成，最终取最高分。
+2. 确定调性：优先使用每小节自己的调号（支持中途转调）；没有调号时
+   回退全局调号或 Krumhansl-Kessler 键感轮廓估计。
+3. 在每个分析窗口内收集音级（按真实时值加权，延音延续不重复计权，
+   低音音级放大），对 39 种和弦模板（大/小/属/挂留/强力和弦等）打分：
+   命中音加分、非和弦音扣分、缺失和弦音扣分；调性只用于拼写与
+   极小破平，最终取最高分。
 4. 吉他风格下，没有三音时收敛成强力和弦（5），低音不是根音时写成
    斜杠和弦（如 ``C5/G``），与 Guitar Pro 里的常见记法一致。
 5. ``--write`` 可以把识别结果写回一个新的 ``.gp`` 文件：向目标轨道的
@@ -30,6 +30,9 @@
 
     # 按节拍标注，并输出 JSON
     uv run gp-chords "xxx.gp" --track 0 --window beat --out chords.json
+
+    # 按和弦变化自动切窗（默认），并在转调段按段落调性处理
+    uv run gp-chords "xxx.gp" --track "Lead Guitar" --key-per-section
 
     # 只看分析结果，不写回；--debug 输出每个小节的明细
     uv run gp-chords "xxx.gp" --track "Lead Guitar" --no-write --debug
@@ -69,6 +72,17 @@ from gpchords.parser import (
 # 音乐理论基础
 # ---------------------------------------------------------------------------
 
+# 打分系数（第 2 步：统一收进常量表）
+UNMATCHED_PENALTY = 0.8  # 非和弦音扣分系数
+MISSING_PENALTY = 1.0  # 和弦音缺失扣分（每个缺失音级）
+COMPLEXITY_PENALTY = 0.5  # 奥卡姆剃刀：模板每多一个音付出的代价
+BASS_WEIGHT_MULTIPLIER = 2.0  # 低音音级权重放大（低音定根音）
+
+# auto 切窗：某组音符权重不足小节总权重该比例时并入相邻组（视为经过音）
+WINDOW_MIN_SHARE = 0.2
+# --key-per-section：段落调内覆盖率低于该值时尝试 K-K 自动估计
+SECTION_KEY_COVERAGE = 0.65
+
 # 和弦模板: 品质 -> (相对根音的音级集合, 名称后缀)
 CHORD_TEMPLATES: dict[str, tuple[tuple[int, ...], str]] = {
     "maj": ((0, 4, 7), ""),
@@ -92,6 +106,27 @@ CHORD_TEMPLATES: dict[str, tuple[tuple[int, ...], str]] = {
     "m9": ((0, 2, 3, 7, 10), "m9"),
     "7sus4": ((0, 5, 7, 10), "7sus4"),
     "6/9": ((0, 2, 4, 7, 9), "6/9"),
+    # ---- 第 4 步扩充（参照 pychord DEFAULT_QUALITIES，去别名、对齐 GP 记法）
+    "7b5": ((0, 4, 6, 10), "7b5"),
+    "7#5": ((0, 4, 8, 10), "7#5"),
+    "7b9": ((0, 1, 4, 7, 10), "7b9"),
+    "7#9": ((0, 3, 4, 7, 10), "7#9"),
+    "9sus4": ((0, 2, 5, 7, 10), "9sus4"),
+    "7#11": ((0, 4, 6, 7, 10), "7#11"),
+    "9#11": ((0, 2, 4, 6, 7, 10), "9#11"),
+    "maj7#11": ((0, 4, 6, 7, 11), "maj7#11"),
+    "maj7#5": ((0, 4, 8, 11), "maj7#5"),
+    "maj7sus2": ((0, 2, 7, 11), "maj7sus2"),
+    "add11": ((0, 4, 5, 7), "add11"),
+    "madd4": ((0, 3, 5, 7), "madd4"),
+    "mmaj7": ((0, 3, 7, 11), "mmaj7"),
+    "m6/9": ((0, 2, 3, 7, 9), "m6/9"),
+    "11": ((0, 2, 4, 5, 7, 10), "11"),
+    "m11": ((0, 2, 3, 5, 7, 10), "m11"),
+    # 13/maj13 与 pychord 一致：含 11 音。吉他实际弹奏常省略 11，
+    # 此时应写成 9/6/9 而不是 13——模板要求 11 存在才能叫 13。
+    "13": ((0, 2, 4, 5, 7, 9, 10), "13"),
+    "maj13": ((0, 2, 4, 5, 7, 9, 11), "maj13"),
 }
 
 _SHARP_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
@@ -155,11 +190,99 @@ def _manual_root_pc(name: str) -> Optional[int]:
 
 
 def note_weights(notes: list[GPNote]) -> dict[int, float]:
-    """音符 -> 音级权重（按四分音符时值加权；无时值信息时按 1）。"""
+    """
+    音符 -> 音级权重（按真实四分音符时值加权，不做下限抬高）。
+
+    - 延音延续音符（tie destination）不重复计权；其时长并入同窗内的
+      延音起点，保持"实际发声时长"不变。
+    - 时值为 0 的音符（GP 里的重复引用/装饰音）权重为 0，不再与
+      四分音符同权。
+    """
     weights: dict[int, float] = defaultdict(float)
     for n in notes:
-        weights[n.midi % 12] += max(n.duration_quarters, 1.0)
+        if n.tie_destination:
+            continue
+        weights[n.midi % 12] += n.duration_quarters
+    for n in notes:
+        if not n.tie_origin:
+            continue
+        for m in notes:
+            if m.tie_destination and m.midi == n.midi:
+                weights[n.midi % 12] += m.duration_quarters
+    if not weights and notes:
+        # 整窗都是延音延续（跨小节延音的承接窗）：没有本窗起点，
+        # 按实际时值计权，识别出延续中的和弦。
+        for n in notes:
+            weights[n.midi % 12] += n.duration_quarters
     return dict(weights)
+
+
+# ---------------------------------------------------------------------------
+# 斜杠低音拼写：按和弦品质的度数关系选择正确的等音（C7/A# -> C7/Bb）
+# ---------------------------------------------------------------------------
+
+# GPIF 度数 -> (字母步进, 无变化音时的半音数)
+_INTERVAL_OFFSETS = {
+    "Second": (1, 2),
+    "Third": (2, 4),
+    "Fourth": (3, 5),
+    "Fifth": (4, 7),
+    "Sixth": (5, 9),
+    "Seventh": (6, 11),
+    "Ninth": (1, 2),
+    "Eleventh": (3, 5),
+    "Thirteenth": (5, 9),
+}
+# GPIF 变化音 -> 相对该度数无变化音的半音偏移
+_ALTERATION_OFFSETS = {
+    "Perfect": 0,
+    "Major": 0,
+    "Minor": -1,
+    "Augmented": 1,
+    "Diminished": -1,
+    "DoubleFlat": -2,
+    "DoubleSharp": 2,
+}
+_LETTER_NAMES = ["C", "D", "E", "F", "G", "A", "B"]
+_DIATONIC_SEMITONES = [0, 2, 4, 5, 7, 9, 11]
+_ACCIDENTALS = {-2: "bb", -1: "b", 0: "", 1: "#", 2: "##"}
+
+
+def _degree_name(root_pc: int, quality: str, pc: int, key_root: Optional[int]) -> Optional[str]:
+    """
+    若 pc 是该品质和弦的度数音，按度数拼写音名（如 C7 的 b7 -> "Bb"）。
+
+    返回 None 表示 pc 不是该品质的和弦音，调用方再回退到调性拼写。
+    """
+    degrees = DEGREES.get(quality)
+    if degrees is None:
+        return None
+    root_name = pc_name(root_pc % 12, key_root)
+    root_letter = _LETTER_NAMES.index(root_name[0])
+    for interval, alteration in degrees:
+        letter_step, base = _INTERVAL_OFFSETS[interval]
+        off = _ALTERATION_OFFSETS[alteration]
+        if (root_pc + base + off) % 12 == pc % 12:
+            letter = (root_letter + letter_step) % 7
+            natural = _DIATONIC_SEMITONES[letter]
+            alt = (root_pc + base + off) - natural
+            if alt > 2:
+                alt -= 12
+            elif alt < -2:
+                alt += 12
+            return f"{_LETTER_NAMES[letter]}{_ACCIDENTALS[alt]}"
+    return None
+
+
+def _bass_name(
+    root_pc: int, bass_pc: int, quality: str, key_root: Optional[int]
+) -> str:
+    """低音音名：优先按和弦度数拼写（C7/A# -> C7/Bb），否则按调性。"""
+    if bass_pc == root_pc:
+        return pc_name(root_pc, key_root)
+    return _degree_name(root_pc, quality, bass_pc, key_root) or pc_name(
+        bass_pc, key_root
+    )
 
 
 def detect_chord(
@@ -171,15 +294,33 @@ def detect_chord(
     """
     识别一段音符最可能的和弦。
 
+    打分：命中音加分 - 非和弦音扣分 - 缺失和弦音扣分。
+    调性（主音/调内）不参与主分数，只作为同分时的极小破平；
+    低音音级在计权时放大，且低音等于根音在同分时优先。
+
+    证据门槛：单音无法确定和弦，返回 None；双音只有纯五度
+    （强力和弦）可以确定，其余双音（三度/七度/二度等）同样返回 None，
+    避免把旋律单音或和弦碎片硬猜成 C5 / C/E / Fsus4 之类的和弦符号。
+
     style="guitar" 时没有三音会收敛为强力和弦（5），低音非根音写成斜杠和弦，
     与 Guitar Pro 常见记法一致；style="theory" 时输出理论上的完整和弦。
     """
     if not notes:
         return None
-    weights = note_weights(notes)
-    total = sum(weights.values())
+    raw = note_weights(notes)
+    weights = dict(raw)
     bass_pc = min(n.midi for n in notes) % 12
+    if bass_pc in weights:
+        weights[bass_pc] *= BASS_WEIGHT_MULTIPLIER
+    total = sum(weights.values())
     key_pcs = _diatonic_pcs(key_root, key_mode) if key_root is not None else None
+    present_pcs = {pc for pc, v in raw.items() if v > 0}
+    if len(present_pcs) <= 1:
+        return None
+    if len(present_pcs) == 2:
+        a, b = sorted(present_pcs)
+        if (b - a) % 12 not in (5, 7):  # 只有纯五度（两个方向）是强力双音
+            return None
 
     candidates = []
     for root in range(12):
@@ -187,34 +328,48 @@ def detect_chord(
             tset = {(pc + root) % 12 for pc in tpl}
             matched = sum(v for pc, v in weights.items() if pc in tset)
             unmatched = total - matched
-            # 奥卡姆剃刀：模板每多一个音都要付出代价，
-            # 只有音符确实构成 7/9/11 和弦时扩展模板才划算。
-            score = matched - 0.8 * unmatched - 1.0 * len(tpl)
-            # 调性先验：主音 > 其他调内音 > 调外音
+            # 奥卡姆剃刀：缺失的和弦音扣分，且模板每多一个音都付出
+            # 小代价——只有音符确实构成 7/9/11/13 和弦时扩展模板才划算。
+            missing = sum(1 for pc in tpl if (root + pc) % 12 not in present_pcs)
+            score = (
+                matched
+                - UNMATCHED_PENALTY * unmatched
+                - MISSING_PENALTY * missing
+                - COMPLEXITY_PENALTY * len(tpl)
+            )
             if key_pcs is not None and root in key_pcs:
-                score += (0.20 if root == key_root else 0.10) * matched
-            # 低音一致性：低音等于根音时加分
-            if bass_pc == root:
-                score += 0.05 * matched
-            candidates.append((score, matched, root, quality, suffix, tset))
+                key_rank = 2 if root == key_root else 1
+            else:
+                key_rank = 0
+            candidates.append(
+                (score, raw.get(root, 0.0), key_rank, bass_pc == root, root, quality, suffix, tset)
+            )
 
-    # 排序：分数 > 根音出现权重 > 模板更简单 > 根音编号更小
+    # 排序：分数 > 调内/主音破平 > 低音=根音 > 根音出现权重 > 模板更简单 > 根音编号更小
+    # 调性只做极小破平：不参与主分数，仅在同分时先看调内/主音。
     candidates.sort(
-        key=lambda c: (c[0], weights.get(c[2], 0.0), -len(c[4]), -c[2]),
+        key=lambda c: (
+            c[0],
+            c[2],
+            c[3],
+            c[1],
+            -len(CHORD_TEMPLATES[c[5]][0]),
+            -c[4],
+        ),
         reverse=True,
     )
-    score, matched, root, quality, suffix, tset = candidates[0]
+    score, _, _, _, root, quality, suffix, tset = candidates[0]
 
     matched_pcs = {pc for pc in weights if pc in tset}
     if style == "guitar" and quality != "5" and matched_pcs <= {root, (root + 7) % 12}:
         quality, suffix = "5", "5"
         tset = {root, (root + 7) % 12}
         matched = sum(v for pc, v in weights.items() if pc in tset)
-        score = matched - 0.8 * (total - matched)
+        score = matched - UNMATCHED_PENALTY * (total - matched)
 
     name = f"{pc_name(root, key_root)}{suffix}"
     if bass_pc != root:
-        name += f"/{pc_name(bass_pc, key_root)}"
+        name += f"/{_bass_name(root, bass_pc, quality, key_root)}"
     return {
         "name": name,
         "root": root,
@@ -222,7 +377,8 @@ def detect_chord(
         "bass_pc": bass_pc,
         "score": round(score, 2),
         "weights": {
-            pc_name(pc, key_root): round(v, 2) for pc, v in sorted(weights.items())
+            pc_name(pc, key_root): round(v, 2)
+            for pc, v in sorted(raw.items())
         },
     }
 
@@ -255,7 +411,8 @@ def _measure_duration(measure: GPMeasure) -> float:
     return 4.0
 
 
-def segment_measure(measure: GPMeasure) -> list[Segment]:
+def segment_measure(measure: GPMeasure, next_measure: Optional[GPMeasure] = None) -> list[Segment]:
+    """整小节窗口（next_measure 仅用于统一调用接口，不使用）。"""
     notes = [n for b in measure.beats for n in b.notes]
     manual = next((b.chord.name for b in measure.beats if b.chord), None)
     anchor = next((b for b in measure.beats if b.notes), None)
@@ -275,7 +432,8 @@ def segment_measure(measure: GPMeasure) -> list[Segment]:
     ]
 
 
-def segment_half(measure: GPMeasure) -> list[Segment]:
+def segment_half(measure: GPMeasure, next_measure: Optional[GPMeasure] = None) -> list[Segment]:
+    """半小节窗口（next_measure 仅用于统一调用接口，不使用）。"""
     half = _measure_duration(measure) / 2.0
     groups: dict[int, list[GPBeat]] = {0: [], 1: []}
     for beat in measure.beats:
@@ -304,7 +462,8 @@ def segment_half(measure: GPMeasure) -> list[Segment]:
     return segments
 
 
-def segment_beat(measure: GPMeasure) -> list[Segment]:
+def segment_beat(measure: GPMeasure, next_measure: Optional[GPMeasure] = None) -> list[Segment]:
+    """逐拍窗口（next_measure 仅用于统一调用接口，不使用）。"""
     segments = []
     for beat in measure.beats:
         if not beat.notes:
@@ -326,7 +485,210 @@ def segment_beat(measure: GPMeasure) -> list[Segment]:
     return segments
 
 
+def _beat_fingerprint(beat: GPBeat) -> frozenset[int]:
+    """拍的和弦指纹：音级集合。"""
+    return frozenset(n.midi % 12 for n in beat.notes)
+
+
+def _group_weight(beats: list[GPBeat]) -> float:
+    return sum(n.duration_quarters for b in beats for n in b.notes)
+
+
+def _is_stepwise(fps: set[int], last: set[int]) -> bool:
+    """新拍与上一拍是否级进（小二/大二度内）——级进视为经过音，不合并。"""
+    for a in fps:
+        for b in last:
+            d = abs(a - b) % 12
+            if min(d, 12 - d) <= 2:
+                return True
+    return False
+
+
+def _fits_some_template(pcs: set[int]) -> bool:
+    """这组音级能否全部落在某个模板和弦的音级集合里（琶音合并用）。"""
+    for root in range(12):
+        for tpl, _ in CHORD_TEMPLATES.values():
+            tones = {(root + i) % 12 for i in tpl}
+            if pcs <= tones:
+                return True
+    return False
+
+
+def _first_content_group(measure: GPMeasure) -> list[GPNote]:
+    """小节第一个内容组（按指纹分组，不做吸收），用于先现音跨小节比对。"""
+    beats = [b for b in measure.beats if b.notes]
+    if not beats:
+        return []
+    groups: list[list[GPBeat]] = []
+    fps: list[set[int]] = []
+    for beat in beats:
+        fp = set(_beat_fingerprint(beat))
+        if groups and (fp == fps[-1] or fp <= fps[-1] or fps[-1] <= fp):
+            groups[-1].append(beat)
+            fps[-1] |= fp
+        else:
+            groups.append([beat])
+            fps.append(set(fp))
+    return [n for b in groups[0] for n in b.notes]
+
+
+def _is_trailing_anticipation(
+    group: list[GPBeat],
+    groups: list[list[GPBeat]],
+    measure: GPMeasure,
+    next_measure: Optional[GPMeasure],
+) -> bool:
+    """
+    判断组是否先现音（anticipation）：小节末短促进入下一小节和弦的音。
+
+    先现音不一定要 tie 进下一小节——短尾组若与下一小节首组和弦同根音，
+    同样按先现音处理，保留为独立窗口（不并入主窗口）。
+    """
+    if next_measure is None or group is not groups[-1]:
+        return False
+    start = min(b.start_quarters for b in group)
+    if start < _measure_duration(measure) * 0.75 - 1e-9:
+        return False
+    group_notes = [n for b in group for n in b.notes]
+    next_notes = _first_content_group(next_measure)
+    if not next_notes:
+        return False
+    group_chord = detect_chord(group_notes, None, "Major", "guitar")
+    next_chord = detect_chord(next_notes, None, "Major", "guitar")
+    return bool(
+        group_chord
+        and next_chord
+        and group_chord["root"] == next_chord["root"]
+    )
+
+
+def _single_note_fits_neighbor_chord(
+    group: list[GPBeat], neighbor: list[GPBeat]
+) -> bool:
+    """
+    先导单音是否能并入相邻成形和弦（如 Fsus2 琶音开头的 G 单音）。
+
+    相邻组必须明显更重（已成形），且并集能识别出包含该单音的三音以上
+    和弦——音阶跑动里相邻单音等权，不会触发。
+    """
+    pcs = {n.midi % 12 for b in group for n in b.notes}
+    if len(pcs) != 1:
+        return False
+    if _group_weight(group) >= _group_weight(neighbor):
+        return False
+    union_notes = [n for b in group + neighbor for n in b.notes]
+    r = detect_chord(union_notes, None, "Major", "guitar")
+    if r is None:
+        return False
+    tones = {(r["root"] + i) % 12 for i in CHORD_TEMPLATES[r["quality"]][0]}
+    return len(tones) >= 3 and pcs <= tones
+
+
+def segment_auto(
+    measure: GPMeasure, next_measure: Optional[GPMeasure] = None
+) -> list[Segment]:
+    """
+    按和弦变化自动切窗：
+
+    1. 逐拍合并指纹相同或互为子集的拍（同和弦重复/琶音尾）；
+    2. 单音/双音碎片按"级进判定 + 模板兼容"合并——逐音琶音
+       （C-G-B-E）合成一窗，音阶跑动（C-D-E-F-G）因级进不合并；
+    3. PC 集不再兼容时切分；
+    4. 权重占比过小的独立组（经过音、尾音）并入相邻组，
+       避免把 16 分音符经过音切成单独和弦；但 tie 进下一小节或与
+       下一小节首组同根音的小节末组是先现音（anticipation），保留
+       为独立窗口。
+    """
+    beats = [b for b in measure.beats if b.notes]
+    if not beats:
+        return []
+
+    groups: list[list[GPBeat]] = []
+    group_fps: list[set[int]] = []
+    last_fp: set[int] | None = None  # 当前组内上一拍的指纹（级进判定）
+    for beat in beats:
+        fp = set(_beat_fingerprint(beat))
+        if groups:
+            gfp = group_fps[-1]
+            if fp == gfp or fp <= gfp or gfp <= fp:
+                groups[-1].append(beat)
+                group_fps[-1] |= fp
+                last_fp = fp
+                continue
+            # 琶音碎片合并：新拍最多 2 音；双音碎片只并入尚未成形的组；
+            # 相对上一拍必须是跳进，且并集能落在某个模板和弦内。
+            if (
+                len(fp) <= 2
+                and (len(fp) == 1 or len(gfp) <= 2)
+                and last_fp is not None
+                and not _is_stepwise(fp, last_fp)
+                and _fits_some_template(gfp | fp)
+            ):
+                groups[-1].append(beat)
+                group_fps[-1] |= fp
+                last_fp = fp
+                continue
+        groups.append([beat])
+        group_fps.append(set(fp))
+        last_fp = fp
+
+    # 吸收占比过小的组：并入权重更大的相邻组（并集做整体识别）
+    total = sum(_group_weight(g) for g in groups)
+    while len(groups) > 1 and total > 0:
+        absorbed = False
+        for i, g in enumerate(groups):
+            is_anticipation = g and all(n.tie_origin for b in g for n in b.notes)
+            if not is_anticipation and _is_trailing_anticipation(g, groups, measure, next_measure):
+                continue
+            if is_anticipation:
+                continue
+            left_w = _group_weight(groups[i - 1]) if i > 0 else -1.0
+            right_w = _group_weight(groups[i + 1]) if i + 1 < len(groups) else -1.0
+            neighbor_idx = i + 1 if right_w > left_w else i - 1
+            neighbor = groups[neighbor_idx]
+            share = _group_weight(g) / total
+            if (
+                share < WINDOW_MIN_SHARE
+                or _single_note_fits_neighbor_chord(g, neighbor)
+            ):
+                if neighbor_idx > i:
+                    groups[neighbor_idx] = groups[i] + groups[neighbor_idx]
+                else:
+                    groups[neighbor_idx] = groups[neighbor_idx] + groups[i]
+                del groups[i]
+                absorbed = True
+                break
+        if not absorbed:
+            break
+
+    segments = []
+    for group in groups:
+        notes = [n for b in group for n in b.notes]
+        if not notes:
+            continue
+        start = min(b.start_quarters for b in group)
+        end = max(b.start_quarters + b.duration_quarters for b in group)
+        manual = next((b.chord.name for b in group if b.chord), None)
+        anchor = next((b for b in group if b.notes), None)
+        segments.append(
+            Segment(
+                bar=measure.index,
+                section=measure.section,
+                window="auto",
+                start_quarters=start,
+                duration_quarters=max(end - start, 0.0),
+                notes=notes,
+                manual=manual,
+                anchor_beat_id=anchor.id if anchor else None,
+                anchor_voice_id=anchor.voice_id if anchor else None,
+                anchor_pos=anchor.position_in_voice if anchor else -1,
+            )
+        )
+    return segments
+
+
 SEGMENTERS = {
+    "auto": segment_auto,
     "measure": segment_measure,
     "half": segment_half,
     "beat": segment_beat,
@@ -344,6 +706,65 @@ def resolve_key(song, track: GPTrack, override: Optional[str]) -> tuple[int, str
     return estimate_key(weights)
 
 
+def measure_key(measure: GPMeasure, fallback: tuple[int, str]) -> tuple[int, str]:
+    """小节自己的调号优先；没有调号回退全局调性。"""
+    if measure.key_signature:
+        try:
+            return parse_key_name(measure.key_signature)
+        except ValueError:
+            pass
+    return fallback
+
+
+def _diatonic_coverage(
+    notes: list[GPNote], key_root: int, key_mode: str
+) -> float:
+    w = note_weights(notes)
+    total = sum(w.values())
+    if total <= 0:
+        return 1.0
+    pcs = _diatonic_pcs(key_root, key_mode)
+    return sum(v for pc, v in w.items() if pc in pcs) / total
+
+
+def resolve_section_keys(
+    track: GPTrack, global_key: tuple[int, str]
+) -> dict[Optional[str], tuple[int, str]]:
+    """
+    --key-per-section：每个段落取其首个带调号小节的调性；
+    若该段音符大量落在预期调外（调内覆盖率过低），用 K-K 对段内音符
+    重新估计（如《无论如何》47-49 桥段的 F#maj7 等调外和弦）。
+    """
+    sections: dict[Optional[str], tuple[int, str]] = {}
+    for m in track.measures:
+        sec = m.section
+        if sec in sections:
+            continue
+        nominal: Optional[tuple[int, str]] = None
+        for m2 in track.measures:
+            if m2.section == sec and m2.key_signature:
+                try:
+                    nominal = parse_key_name(m2.key_signature)
+                except ValueError:
+                    nominal = None
+                break
+        if nominal is None:
+            nominal = global_key
+        notes = [
+            n
+            for m2 in track.measures
+            if m2.section == sec
+            for b in m2.beats
+            for n in b.notes
+        ]
+        if _diatonic_coverage(notes, *nominal) < SECTION_KEY_COVERAGE:
+            kk = estimate_key(note_weights(notes))
+            if _diatonic_coverage(notes, *kk) > _diatonic_coverage(notes, *nominal):
+                nominal = kk
+        sections[sec] = nominal
+    return sections
+
+
 # ---------------------------------------------------------------------------
 # 手工标注对照
 # ---------------------------------------------------------------------------
@@ -351,8 +772,7 @@ def resolve_key(song, track: GPTrack, override: Optional[str]) -> tuple[int, str
 
 def compare_manual(
     track: GPTrack,
-    key_root: int,
-    key_mode: str,
+    keys_by_bar: dict[int, tuple[int, str]],
     style: str,
 ) -> list[dict]:
     """
@@ -363,6 +783,7 @@ def compare_manual(
     """
     rows = []
     for measure in track.measures:
+        key_root, key_mode = keys_by_bar[measure.index]
         for beat in measure.beats:
             if beat.chord is None:
                 continue
@@ -446,6 +867,24 @@ DEGREES: dict[str, list[tuple[str, str]]] = {
     "m9": [("Third", "Minor"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Major")],
     "7sus4": [("Fourth", "Perfect"), ("Fifth", "Perfect"), ("Seventh", "Minor")],
     "6/9": [("Third", "Major"), ("Fifth", "Perfect"), ("Sixth", "Major"), ("Ninth", "Major")],
+    "7b5": [("Third", "Major"), ("Fifth", "Diminished"), ("Seventh", "Minor")],
+    "7#5": [("Third", "Major"), ("Fifth", "Augmented"), ("Seventh", "Minor")],
+    "7b9": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Minor")],
+    "7#9": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Augmented")],
+    "9sus4": [("Fourth", "Perfect"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Major")],
+    "7#11": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Eleventh", "Augmented")],
+    "9#11": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Major"), ("Eleventh", "Augmented")],
+    "maj7#11": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Major"), ("Eleventh", "Augmented")],
+    "maj7#5": [("Third", "Major"), ("Fifth", "Augmented"), ("Seventh", "Major")],
+    "maj7sus2": [("Second", "Major"), ("Fifth", "Perfect"), ("Seventh", "Major")],
+    "add11": [("Third", "Major"), ("Fifth", "Perfect"), ("Eleventh", "Perfect")],
+    "madd4": [("Third", "Minor"), ("Fourth", "Perfect"), ("Fifth", "Perfect")],
+    "mmaj7": [("Third", "Minor"), ("Fifth", "Perfect"), ("Seventh", "Major")],
+    "m6/9": [("Third", "Minor"), ("Fifth", "Perfect"), ("Sixth", "Major"), ("Ninth", "Major")],
+    "11": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Major"), ("Eleventh", "Perfect")],
+    "m11": [("Third", "Minor"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Major"), ("Eleventh", "Perfect")],
+    "13": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Major"), ("Eleventh", "Perfect"), ("Thirteenth", "Major")],
+    "maj13": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Major"), ("Ninth", "Major"), ("Eleventh", "Perfect"), ("Thirteenth", "Major")],
 }
 
 
@@ -878,28 +1317,46 @@ def run_analysis(args) -> list[dict]:
     else:
         track = prompt_track(song)
 
-    key_root, key_mode = resolve_key(song, track, args.key)
+    global_key = resolve_key(song, track, args.key)
+    key_root, key_mode = global_key
     if args.key is None:
         print(
             f"调性: {pc_name(key_root, key_root)}{'m' if key_mode == 'Minor' else ''} "
-            "(来自调号，可用 --key 覆盖)"
+            "(全局；转调段按各小节调号，可用 --key 覆盖)"
         )
     else:
         print(f"调性: {pc_name(key_root, key_root)}{'m' if key_mode == 'Minor' else ''} (--key 指定)")
 
+    # 每个分析窗口的调性：--key 强制全局；否则默认每小节自己的调号
+    # （无调号回退全局）；--key-per-section 时无调号的小节回退段落调性
+    # （段落调内覆盖率过低时用 K-K 自动估计），有小节调号时仍以小节调号为准。
+    if args.key:
+        keys_by_bar = {m.index: global_key for m in track.measures}
+    elif args.key_per_section:
+        section_keys = resolve_section_keys(track, global_key)
+        keys_by_bar = {m.index: measure_key(m, section_keys[m.section]) for m in track.measures}
+        print(f"调性模式: 按段落（{len(section_keys)} 个段落）")
+    else:
+        keys_by_bar = {m.index: measure_key(m, global_key) for m in track.measures}
+        print("调性模式: 每小节调号（无调号回退全局）")
+
     segmenter = SEGMENTERS[args.window]
     results = []
-    for measure in track.measures:
-        for seg in segmenter(measure):
+    measures = track.measures
+    for mi, measure in enumerate(measures):
+        seg_key = keys_by_bar[measure.index]
+        next_measure = measures[mi + 1] if mi + 1 < len(measures) else None
+        for seg in segmenter(measure, next_measure):
             if len(seg.notes) < args.min_notes:
                 continue
-            detected = detect_chord(seg.notes, key_root, key_mode, args.style)
+            detected = detect_chord(seg.notes, *seg_key, args.style)
             results.append(
                 {
                     "bar": seg.bar,
                     "section": seg.section,
                     "window": seg.window,
                     "start_quarters": seg.start_quarters,
+                    "key": f"{pc_name(seg_key[0], seg_key[0])}{'m' if seg_key[1] == 'Minor' else ''}",
                     "anchor_beat_id": seg.anchor_beat_id,
                     "anchor_voice_id": seg.anchor_voice_id,
                     "anchor_pos": seg.anchor_pos,
@@ -914,16 +1371,17 @@ def run_analysis(args) -> list[dict]:
         print(f"{'小节':>4}  {'窗口':<10} {'自动和弦':<12} {'音符':<32} 手动")
         print("-" * 86)
         for r in results:
-            weights = r["chord"]["weights"]
+            chord = r["chord"]
+            weights = chord["weights"] if chord else {}
             pcs = " ".join(f"{k}:{v:g}" for k, v in weights.items()) if weights else "-"
             print(
-                f"{r['bar']:>4}  {r['window']:<10} {r['chord']['name']:<12} "
+                f"{r['bar']:>4}  {r['window']:<10} {(chord['name'] if chord else '-'):<12} "
                 f"{pcs:<32} {r['manual'] or ''}"
             )
     print(f"共分析 {len(results)} 个窗口。")
 
     if not args.no_compare:
-        rows = compare_manual(track, key_root, key_mode, args.style)
+        rows = compare_manual(track, keys_by_bar, args.style)
         print_comparison(rows)
 
     if args.out:
@@ -934,7 +1392,7 @@ def run_analysis(args) -> list[dict]:
             "window": args.window,
             "style": args.style,
             "results": results,
-            "manual_comparison": compare_manual(track, key_root, key_mode, args.style),
+            "manual_comparison": compare_manual(track, keys_by_bar, args.style),
         }
         with open(args.out, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -1003,14 +1461,18 @@ def main() -> None:
     parser.add_argument("file", nargs="?", help=".gp / .gpx 文件路径（--demo 时不需要）")
     parser.add_argument("--track", default=None, help="轨道名称或索引（不指定时交互选择）")
     parser.add_argument(
-        "--window", choices=["measure", "half", "beat"], default="measure",
-        help="分析窗口：整小节 / 半小节 / 每个节拍",
+        "--window", choices=["auto", "measure", "half", "beat"], default="auto",
+        help="分析窗口：auto=按和弦变化切窗（默认），measure/half/beat=固定窗口",
     )
     parser.add_argument(
         "--style", choices=["guitar", "theory"], default="guitar",
         help="guitar=强力/斜杠记法，theory=完整理论和弦",
     )
     parser.add_argument("--key", help="指定调性，如 C / Am / F#m（默认读文件调号）")
+    parser.add_argument(
+        "--key-per-section", action="store_true",
+        help="没有小节调号时按段落确定调性（段落调内覆盖率过低时用 K-K 自动估计）",
+    )
     parser.add_argument("--min-notes", type=int, default=1, help="少于该音符数的窗口跳过")
     parser.add_argument("--out", help="输出 JSON 结果文件")
     parser.add_argument(

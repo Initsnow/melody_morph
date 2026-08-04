@@ -44,8 +44,12 @@ uv run python midi_to_ust.py input.mid -o output.ust
 # 自动标注和弦：交互选择轨道 -> 识别 -> 自动写回 <原名>_chords.gp（原文件不变）
 uv run gp-chords "song.gp"
 
-# 指定轨道；--no-write 不写回，--debug 输出小节明细
+# 指定轨道；默认按和弦变化自动切窗（--window auto），--no-write 不写回
 uv run gp-chords "song.gp" --track "Lead Guitar" --no-write --debug
+
+# 固定按小节/半小节/节拍切窗；转调谱默认逐小节读调号，也可按段落调性
+uv run gp-chords "song.gp" --window measure
+uv run gp-chords "song.gp" --key-per-section
 
 # 查看文件内部结构（调试用）
 uv run gp-info "song.gp" --track "Lead Guitar"

@@ -30,6 +30,8 @@ class GuitarProError(Exception):
 
 
 # 音符时值名称 -> 四分音符数
+# GPIF 实际写法不统一：GP6/7/8 常见 "Eighth"/"16th"，部分文件也用
+# "Sixteenth"/"ThirtySecond" 等描述式写法，这里两种都收。
 NOTE_VALUE_QUARTERS = {
     "Long": 16.0,
     "DoubleWhole": 8.0,
@@ -37,21 +39,33 @@ NOTE_VALUE_QUARTERS = {
     "Half": 2.0,
     "Quarter": 1.0,
     "Eighth": 0.5,
+    "8th": 0.5,
     "Sixteenth": 0.25,
+    "16th": 0.25,
     "ThirtySecond": 0.125,
+    "32nd": 0.125,
     "SixtyFourth": 0.0625,
+    "64th": 0.0625,
     "HundredTwentyEighth": 0.03125,
+    "128th": 0.03125,
     "TwoHundredFiftySixth": 0.015625,
+    "256th": 0.015625,
 }
 
 # GPIF 中升降号的写法 -> 常见记法
+# 和弦元素用属性写法（accidental="Sharp"），音符 Pitch 里有的文件用
+# 元素文本写法（<Accidental>#</Accidental>），两种都收。
 ACCIDENTAL_SYMBOL = {
     "": "",
     "Natural": "",
     "Sharp": "#",
+    "#": "#",
     "Flat": "b",
+    "b": "b",
     "DoubleSharp": "##",
+    "##": "##",
     "DoubleFlat": "bb",
+    "bb": "bb",
 }
 
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
@@ -152,6 +166,9 @@ def detect_format(path: str | Path) -> tuple[str, str]:
     if head.startswith(b"FICHIER GUITAR PRO v"):
         version = head[len(b"FICHIER GUITAR PRO v"):].decode("ascii", "replace").strip()
         return "gp" + version[:1], version
+    if head.startswith(b"BCFZ"):
+        # GP4/5 时代的部分二进制文件用 BCFZ 魔数开头（含一些误命名为 .gpx 的文件）
+        return "gp5", ""
     if not head.startswith(b"PK\x03\x04"):
         return "unknown", ""
     try:
