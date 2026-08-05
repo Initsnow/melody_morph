@@ -99,6 +99,8 @@ SECTION_KEY_COVERAGE = 0.65
 CHORD_TEMPLATES: dict[str, tuple[tuple[int, ...], str]] = {
     "maj": ((0, 4, 7), ""),
     "min": ((0, 3, 7), "m"),
+    "maj(no5)": ((0, 4), "(no5)"),
+    "m(no5)": ((0, 3), "m(no5)"),
     "dim": ((0, 3, 6), "dim"),
     "aug": ((0, 4, 8), "aug"),
     "sus2": ((0, 2, 7), "sus2"),
@@ -340,7 +342,10 @@ def detect_chord(
         return None
     if len(present_pcs) == 2:
         a, b = sorted(present_pcs)
-        if (b - a) % 12 not in (5, 7):  # 只有纯五度（两个方向）是强力双音
+        d = (b - a) % 12
+        # 双音只识别三度（定大小调，如 C+E -> C(no5)）与五度（强力和弦）：
+        # 二度/七度/增四度等可能是经过音或旋律碎片，不硬猜成和弦。
+        if not (d in (5, 7) or min(d, 12 - d) in (3, 4)):
             return None
 
     candidates = []
@@ -948,6 +953,8 @@ def print_comparison(rows: list[dict]) -> None:
 DEGREES: dict[str, list[tuple[str, str]]] = {
     "maj": [("Third", "Major"), ("Fifth", "Perfect")],
     "min": [("Third", "Minor"), ("Fifth", "Perfect")],
+    "maj(no5)": [("Third", "Major"), ("Fifth", "Perfect")],
+    "m(no5)": [("Third", "Minor"), ("Fifth", "Perfect")],
     "dim": [("Third", "Minor"), ("Fifth", "Diminished")],
     "aug": [("Third", "Major"), ("Fifth", "Augmented")],
     "sus2": [("Second", "Major"), ("Fifth", "Perfect")],

@@ -227,16 +227,28 @@ def test_single_note_not_detected(midis):
 @pytest.mark.parametrize(
     "midis",
     [
-        [48, 52],  # 大三度（C+E）
-        [52, 55],  # 小三度（E+G）
         [48, 58],  # 小七度（C+Bb）
         [48, 50],  # 大二度（C+D）
         [48, 54],  # 增四度（C+F#）
     ],
 )
 def test_non_power_dyad_not_detected(midis):
-    # 非纯五度双音是和弦碎片：不得猜成 C / C/E / Fsus4 / Csus2
+    # 二度/七度/增四度双音是和弦碎片或经过音：不得硬猜成和弦
     assert detect(midis, key_root=0, key_mode="Major") is None
+
+
+@pytest.mark.parametrize(
+    "midis,expected",
+    [
+        ([48, 52], "C(no5)"),  # 大三度：根音+三度定性质
+        ([52, 55], "Em(no5)"),  # 小三度
+        ([48, 51], "Cm(no5)"),
+        ([52, 60], "C(no5)/E"),  # 转位：三度在低音时斜杠
+    ],
+)
+def test_third_dyad_detected(midis, expected):
+    result = detect(midis, key_root=0, key_mode="Major")
+    assert result is not None and result["name"] == expected
 
 
 @pytest.mark.parametrize(
