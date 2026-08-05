@@ -211,6 +211,10 @@ def note_weights(notes: list[GPNote]) -> dict[int, float]:
     """
     音符 -> 音级权重（按真实四分音符时值加权，不做下限抬高）。
 
+    - X 哑音（``muted``，GPIF 的 Muted 属性）没有实际音高，不计权；
+      GP 里存的 MIDI 只是"若不制音会发出的音"，会污染和弦识别。
+    - P.M. 闷音（``palm_muted``）音高明确，正常按同一规则计权——
+      闷音扫弦本身就是正在演奏的和声，不能排除。
     - 延音延续音符（tie destination）不重复计权；其时长并入同窗内的
       延音起点，保持"实际发声时长"不变。
     - 跨窗延音（延音起点在上一窗/上一小节）在有其他音符的窗口里也按
@@ -219,18 +223,24 @@ def note_weights(notes: list[GPNote]) -> dict[int, float]:
     - 时值为 0 的音符（GP 里的重复引用/装饰音）权重为 0，不再与
       四分音符同权。
     """
-    origin_pcs = {m.midi % 12 for m in notes if m.tie_origin}
+    origin_pcs = {m.midi % 12 for m in notes if m.tie_origin and not m.muted}
     weights: dict[int, float] = defaultdict(float)
     for n in notes:
+        if n.muted:
+            continue
         if n.tie_destination and n.midi % 12 in origin_pcs:
             continue
         weights[n.midi % 12] += n.duration_quarters
     # 把同窗延音目标的时长并入其延音起点（保持"实际发声时长"不变）
     for n in notes:
-        if not n.tie_origin:
+        if not n.tie_origin or n.muted:
             continue
         for m in notes:
-            if m.tie_destination and m.midi % 12 == n.midi % 12:
+            if (
+                m.tie_destination
+                and not m.muted
+                and m.midi % 12 == n.midi % 12
+            ):
                 weights[n.midi % 12] += m.duration_quarters
     return dict(weights)
 
@@ -328,6 +338,9 @@ def detect_chord(
     style="guitar" 时没有三音会收敛为强力和弦（5），低音非根音写成斜杠和弦，
     与 Guitar Pro 常见记法一致；style="theory" 时输出理论上的完整和弦。
     """
+    # X 哑音没有音高：识别前统一剔除，避免其"理论音高"污染
+    # 音级权重与低音判定（低音只应来自真正在响的音符）。
+    notes = [n for n in notes if not n.muted]
     if not notes:
         return None
     raw = note_weights(notes)
@@ -446,9 +459,11 @@ def _measure_duration(measure: GPMeasure) -> float:
 
 def segment_measure(measure: GPMeasure, next_measure: Optional[GPMeasure] = None) -> list[Segment]:
     """整小节窗口（next_measure 仅用于统一调用接口，不使用）。"""
-    notes = [n for b in measure.beats for n in b.notes]
+    notes = [n for b in measure.beats for n in b.notes if not n.muted]
     manual = next((b.chord.name for b in measure.beats if b.chord), None)
-    anchor = next((b for b in measure.beats if b.notes), None)
+    anchor = next(
+        (b for b in measure.beats if any(not n.muted for n in b.notes)), None
+    )
     return [
         Segment(
             bar=measure.index,
@@ -473,11 +488,13 @@ def segment_half(measure: GPMeasure, next_measure: Optional[GPMeasure] = None) -
         groups[0 if beat.start_quarters < half else 1].append(beat)
     segments = []
     for idx, beats in groups.items():
-        notes = [n for b in beats for n in b.notes]
+        notes = [n for b in beats for n in b.notes if not n.muted]
         if not notes:
             continue
         manual = next((b.chord.name for b in beats if b.chord), None)
-        anchor = next((b for b in beats if b.notes), None)
+        anchor = next(
+            (b for b in beats if any(not n.muted for n in b.notes)), None
+        )
         segments.append(
             Segment(
                 bar=measure.index,
@@ -499,7 +516,8 @@ def segment_beat(measure: GPMeasure, next_measure: Optional[GPMeasure] = None) -
     """逐拍窗口（next_measure 仅用于统一调用接口，不使用）。"""
     segments = []
     for beat in measure.beats:
-        if not beat.notes:
+        pitched = [n for n in beat.notes if not n.muted]
+        if not pitched:
             continue
         segments.append(
             Segment(
@@ -508,7 +526,7 @@ def segment_beat(measure: GPMeasure, next_measure: Optional[GPMeasure] = None) -
                 window=f"beat@{beat.start_quarters:g}",
                 start_quarters=beat.start_quarters,
                 duration_quarters=beat.duration_quarters,
-                notes=list(beat.notes),
+                notes=pitched,
                 manual=beat.chord.name if beat.chord else None,
                 anchor_beat_id=beat.id,
                 anchor_voice_id=beat.voice_id,
@@ -520,11 +538,13 @@ def segment_beat(measure: GPMeasure, next_measure: Optional[GPMeasure] = None) -
 
 def _beat_fingerprint(beat: GPBeat) -> frozenset[int]:
     """拍的和弦指纹：音级集合。"""
-    return frozenset(n.midi % 12 for n in beat.notes)
+    return frozenset(n.midi % 12 for n in beat.notes if not n.muted)
 
 
 def _group_weight(beats: list[GPBeat]) -> float:
-    return sum(n.duration_quarters for b in beats for n in b.notes)
+    return sum(
+        n.duration_quarters for b in beats for n in b.notes if not n.muted
+    )
 
 
 def _is_stepwise(fps: set[int], last: set[int]) -> bool:
@@ -549,7 +569,7 @@ def _fits_some_template(pcs: set[int]) -> bool:
 
 def _first_content_group(measure: GPMeasure) -> list[GPNote]:
     """小节第一个内容组（按指纹分组，不做吸收），用于先现音跨小节比对。"""
-    beats = [b for b in measure.beats if b.notes]
+    beats = [b for b in measure.beats if any(not n.muted for n in b.notes)]
     if not beats:
         return []
     groups: list[list[GPBeat]] = []
@@ -562,7 +582,7 @@ def _first_content_group(measure: GPMeasure) -> list[GPNote]:
         else:
             groups.append([beat])
             fps.append(set(fp))
-    return [n for b in groups[0] for n in b.notes]
+    return [n for b in groups[0] for n in b.notes if not n.muted]
 
 
 def _is_trailing_anticipation(
@@ -604,7 +624,7 @@ def _single_note_fits_neighbor_chord(
     相邻组必须明显更重（已成形），且并集能识别出包含该单音的三音以上
     和弦——音阶跑动里相邻单音等权，不会触发。
     """
-    pcs = {n.midi % 12 for b in group for n in b.notes}
+    pcs = {n.midi % 12 for b in group for n in b.notes if not n.muted}
     if len(pcs) != 1:
         return False
     if _group_weight(group) >= _group_weight(neighbor):
@@ -632,7 +652,8 @@ def segment_auto(
        下一小节首组同根音的小节末组是先现音（anticipation），保留
        为独立窗口。
     """
-    beats = [b for b in measure.beats if b.notes]
+    # 只有 X 哑音的拍是纯打击效果，没有和声内容：不进窗口，也不参与分组。
+    beats = [b for b in measure.beats if any(not n.muted for n in b.notes)]
     if not beats:
         return []
 
@@ -696,13 +717,15 @@ def segment_auto(
 
     segments = []
     for group in groups:
-        notes = [n for b in group for n in b.notes]
+        notes = [n for b in group for n in b.notes if not n.muted]
         if not notes:
             continue
         start = min(b.start_quarters for b in group)
         end = max(b.start_quarters + b.duration_quarters for b in group)
         manual = next((b.chord.name for b in group if b.chord), None)
-        anchor = next((b for b in group if b.notes), None)
+        anchor = next(
+            (b for b in group if any(not n.muted for n in b.notes)), None
+        )
         segments.append(
             Segment(
                 bar=measure.index,

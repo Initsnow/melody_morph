@@ -101,6 +101,8 @@ class GPNote:
     duration_quarters: float = 0.0  # 以四分音符为单位的时值
     tie_origin: bool = False
     tie_destination: bool = False
+    palm_muted: bool = False  # P.M. 闷音：音高明确，正常参与和弦识别
+    muted: bool = False  # X 哑音/制音：无实际音高，识别时应忽略
 
     @property
     def pitch_class(self) -> int:
@@ -410,6 +412,10 @@ def _parse_note(note_el: ET.Element) -> GPNote:
         elif name == "String":
             string = prop.findtext("String")
             note.string = int(string) if string and string.strip().isdigit() else None
+        elif name == "PalmMuted":
+            note.palm_muted = prop.find("Enable") is not None
+        elif name == "Muted":
+            note.muted = prop.find("Enable") is not None
     tie = note_el.find("Tie")
     if tie is not None:
         note.tie_origin = tie.get("origin") == "true"

@@ -45,12 +45,21 @@ SAMPLE_FILE = Path(
 )
 
 
-def note(midi: int, dur: float = 1.0, tie_origin=False, tie_destination=False) -> GPNote:
+def note(
+    midi: int,
+    dur: float = 1.0,
+    tie_origin=False,
+    tie_destination=False,
+    muted=False,
+    palm_muted=False,
+) -> GPNote:
     return GPNote(
         midi=midi,
         duration_quarters=dur,
         tie_origin=tie_origin,
         tie_destination=tie_destination,
+        muted=muted,
+        palm_muted=palm_muted,
     )
 
 
@@ -321,6 +330,87 @@ def test_cross_window_tie_in_mixed_window_counted():
     assert w[9] == pytest.approx(0.5)
     r = detect_chord(notes, 0, "Major", "guitar")
     assert r is not None and r["name"] == "Am9"
+
+
+def test_muted_dead_notes_excluded_from_weights():
+    # X 哑音的 MIDI 只是"若不制音会发出的音"，没有实际音高，不计权
+    w = note_weights([note(48, 1.0), note(50, 0.5, muted=True)])
+    assert w == {0: 1.0}
+
+
+def test_detect_chord_ignores_dead_notes_including_bass():
+    # 哑音不参与低音判定：A2 哑音不能把 C 和弦拉成 A 斜杠和弦
+    notes = [
+        note(48, 1.0),  # C3
+        note(52, 1.0),  # E3
+        note(55, 1.0),  # G3
+        note(45, 0.5, muted=True),  # A2 X 哑音
+    ]
+    r = detect_chord(notes, 0, "Major", "guitar")
+    assert r is not None
+    assert r["name"] == "C"
+    assert r["bass_pc"] == 0
+
+
+def test_palm_muted_notes_still_counted():
+    # P.M. 闷音音高明确，就是正在演奏的和声，必须正常参与识别
+    w = note_weights([note(48, 1.0, palm_muted=True), note(52, 1.0, palm_muted=True)])
+    assert w == {0: 1.0, 4: 1.0}
+    r = detect_chord(
+        [note(48, 1.0, palm_muted=True), note(55, 1.0, palm_muted=True)],
+        0,
+        "Major",
+        "guitar",
+    )
+    assert r is not None and r["name"] == "C5"
+
+
+def test_segment_measure_filters_dead_notes():
+    m = measure(
+        1,
+        [
+            beat(0.0, [(48, 1.0), (52, 1.0)]),
+            beat(1.0, [(45, 0.5), (50, 0.5), (55, 0.5)]),  # 纯哑音拍
+        ],
+    )
+    # 把第二个拍替换成纯哑音拍
+    m.beats[1] = GPBeat(
+        id="bx",
+        start_quarters=1.0,
+        duration_quarters=0.5,
+        notes=[note(45, 0.5, muted=True), note(50, 0.5, muted=True)],
+        voice_id="v1",
+        position_in_voice=1,
+    )
+    segs = segment_measure(m)
+    assert len(segs) == 1
+    assert all(not n.muted for n in segs[0].notes)
+    assert [n.midi for n in segs[0].notes] == [48, 52]
+
+
+def test_auto_window_skips_muted_only_beats():
+    # 两个 C5 拍之间夹一个 X 哑音拍：纯打击效果不产生窗口、不切断分组
+    m = measure(
+        1,
+        [
+            beat(0.0, [(48, 0.5), (55, 0.5)]),
+            beat(0.5, [(45, 0.5)]),  # 哑音，稍后替换
+            beat(1.0, [(48, 0.5), (55, 0.5)]),
+        ],
+    )
+    m.beats[1] = GPBeat(
+        id="bx",
+        start_quarters=0.5,
+        duration_quarters=0.5,
+        notes=[note(45, 0.5, muted=True)],
+        voice_id="v1",
+        position_in_voice=1,
+    )
+    segs = segment_auto(m)
+    assert len(segs) == 1
+    assert [n.midi for n in segs[0].notes] == [48, 55, 48, 55]
+    r = detect_chord(segs[0].notes, 0, "Major", "guitar")
+    assert r is not None and r["name"] == "C5"
 
 
 # ---------------------------------------------------------------------------
@@ -696,9 +786,11 @@ def test_sample_file_acceptance_bars():
         r = detect_chord(segs[0].notes, *by_bar[bar], "guitar")
         return r["name"] if r else None
 
-    # 51 小节：主窗口 Em，尾部 D-A-F 是 52 小节 Dm 的不延音先现音，独立成窗
+    # 51 小节：主窗口 Em；小节尾的 D-A-F 是 X 哑音扫弦（无实际音高），
+    # 不参与识别——auto 只有 Em 一窗，整小节视图也不再被哑音的理论
+    # 音高污染成 G6/9/E。
     assert bar_detect(51, segment_auto) == "Em"
-    assert bar_detect(51, segment_measure) == "G6/9/E"
+    assert bar_detect(51, segment_measure) == "Em"
     assert bar_detect(53, segment_measure) == "Cmaj7"
     assert bar_detect(53, segment_auto) == "Cmaj7"
     assert bar_detect(56, segment_measure) == "Cmaj7"
@@ -735,3 +827,50 @@ def test_sample_file_section_keys():
     # --key-per-section 模式下，有小节调号的 50-56 小节仍以小节调号 C 为准
     m51 = next(m for m in track.measures if m.index == 51)
     assert measure_key(m51, sections[m51.section]) == (0, "Major")
+
+
+def test_parse_palm_muted_and_dead_note_flags(tmp_path):
+    """GPIF 的 PalmMuted（P.M. 闷音）与 Muted（X 哑音）属性应被读出。"""
+    import zipfile
+
+    gpif = """<GPIF>
+      <GPVersion>8.0</GPVersion>
+      <Tracks><Track id="0"><Name>L</Name><Staves><Staff><Properties>
+        <Property name="Tuning"><Pitches>40 45 50 55 59 64</Pitches></Property>
+      </Properties></Staff></Staves></Track></Tracks>
+      <MasterBars><MasterBar><Time>4/4</Time>
+        <Key><AccidentalCount>0</AccidentalCount><Mode>Major</Mode></Key>
+        <Bars>0</Bars></MasterBar></MasterBars>
+      <Bars><Bar id="0"><Voices>0</Voices></Bar></Bars>
+      <Voices><Voice id="0"><Beats>0 1</Beats></Voice></Voices>
+      <Beats>
+        <Beat id="0"><Notes>0</Notes><Rhythm><ref>0</ref></Rhythm></Beat>
+        <Beat id="1"><Notes>1</Notes><Rhythm><ref>0</ref></Rhythm></Beat>
+      </Beats>
+      <Notes>
+        <Note id="0"><Properties>
+          <Property name="Midi"><Number>48</Number></Property>
+          <Property name="Fret"><Fret>1</Fret></Property>
+          <Property name="String"><String>3</String></Property>
+          <Property name="PalmMuted"><Enable /></Property>
+        </Properties></Note>
+        <Note id="1"><Properties>
+          <Property name="Midi"><Number>45</Number></Property>
+          <Property name="Muted"><Enable /></Property>
+        </Properties></Note>
+      </Notes>
+      <Rhythms><Rhythm id="0"><NoteValue>Quarter</NoteValue></Rhythm></Rhythms>
+    </GPIF>"""
+    gp = tmp_path / "mini.gp"
+    with zipfile.ZipFile(gp, "w") as z:
+        z.writestr("Content/score.gpif", gpif)
+        z.writestr("VERSION", "8.0")
+
+    song = parse_gp(gp)
+    track = song.tracks[0]
+    palm = [n for n in track.notes if n.palm_muted]
+    dead = [n for n in track.notes if n.muted]
+    assert [n.midi for n in palm] == [48]
+    assert [n.midi for n in dead] == [45]
+    assert all(not n.muted for n in palm)
+    assert all(not n.palm_muted for n in dead)
