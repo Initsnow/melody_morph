@@ -534,6 +534,28 @@ def test_no_aliases_duplicated():
     assert "mM7" not in CHORD_TEMPLATES
 
 
+def test_degrees_use_gp8_native_alterations():
+    # GP8 原生文件的惯例：9/11/13 度的无变化写法是 Perfect，
+    # b9 是 Diminished、#9 是 Augmented。写成 Major/Minor 会让
+    # GP8 把构成音显示成默认的 C（实测 F#9sus4 / Eadd9 的九音显示成 C）。
+    assert ("Ninth", "Perfect") in DEGREES["add9"]
+    assert ("Ninth", "Perfect") in DEGREES["maj9"]
+    assert ("Ninth", "Perfect") in DEGREES["m9"]
+    assert ("Ninth", "Perfect") in DEGREES["9sus4"]
+    assert ("Ninth", "Diminished") in DEGREES["7b9"]
+    assert ("Ninth", "Augmented") in DEGREES["7#9"]
+    assert ("Eleventh", "Perfect") in DEGREES["11"]
+    assert ("Thirteenth", "Perfect") in DEGREES["13"]
+    assert ("Thirteenth", "Perfect") in DEGREES["maj13"]
+    for quality, degs in DEGREES.items():
+        for interval, alteration in degs:
+            assert alteration not in ("Major", "Minor") or interval not in (
+                "Ninth",
+                "Eleventh",
+                "Thirteenth",
+            ), (quality, interval, alteration)
+
+
 # ---------------------------------------------------------------------------
 # 第 5 步：逐小节调性 / 转调
 # ---------------------------------------------------------------------------

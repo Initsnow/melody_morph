@@ -931,6 +931,9 @@ def print_comparison(rows: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 
 # 品质 -> (Interval, Alteration)，对应 GPIF 的 <Degree>
+# 注意：GP8 对 9/11/13 度的无变化写法是 "Perfect"（实测原生文件全部如此），
+# 9 度降半音是 "Diminished"、升半音是 "Augmented"；写成 "Ninth Major/Minor"
+# 或 "Thirteenth Major" GP8 不认，会把构成音显示成默认的 C。
 DEGREES: dict[str, list[tuple[str, str]]] = {
     "maj": [("Third", "Major"), ("Fifth", "Perfect")],
     "min": [("Third", "Minor"), ("Fifth", "Perfect")],
@@ -946,31 +949,31 @@ DEGREES: dict[str, list[tuple[str, str]]] = {
     "m7": [("Third", "Minor"), ("Fifth", "Perfect"), ("Seventh", "Minor")],
     "m7b5": [("Third", "Minor"), ("Fifth", "Diminished"), ("Seventh", "Minor")],
     "dim7": [("Third", "Minor"), ("Fifth", "Diminished"), ("Seventh", "Diminished")],
-    "add9": [("Third", "Major"), ("Fifth", "Perfect"), ("Ninth", "Major")],
-    "madd9": [("Third", "Minor"), ("Fifth", "Perfect"), ("Ninth", "Major")],
-    "9": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Major")],
-    "maj9": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Major"), ("Ninth", "Major")],
-    "m9": [("Third", "Minor"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Major")],
+    "add9": [("Third", "Major"), ("Fifth", "Perfect"), ("Ninth", "Perfect")],
+    "madd9": [("Third", "Minor"), ("Fifth", "Perfect"), ("Ninth", "Perfect")],
+    "9": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Perfect")],
+    "maj9": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Major"), ("Ninth", "Perfect")],
+    "m9": [("Third", "Minor"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Perfect")],
     "7sus4": [("Fourth", "Perfect"), ("Fifth", "Perfect"), ("Seventh", "Minor")],
-    "6/9": [("Third", "Major"), ("Fifth", "Perfect"), ("Sixth", "Major"), ("Ninth", "Major")],
+    "6/9": [("Third", "Major"), ("Fifth", "Perfect"), ("Sixth", "Major"), ("Ninth", "Perfect")],
     "7b5": [("Third", "Major"), ("Fifth", "Diminished"), ("Seventh", "Minor")],
     "7#5": [("Third", "Major"), ("Fifth", "Augmented"), ("Seventh", "Minor")],
-    "7b9": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Minor")],
+    "7b9": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Diminished")],
     "7#9": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Augmented")],
-    "9sus4": [("Fourth", "Perfect"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Major")],
+    "9sus4": [("Fourth", "Perfect"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Perfect")],
     "7#11": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Eleventh", "Augmented")],
-    "9#11": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Major"), ("Eleventh", "Augmented")],
+    "9#11": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Perfect"), ("Eleventh", "Augmented")],
     "maj7#11": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Major"), ("Eleventh", "Augmented")],
     "maj7#5": [("Third", "Major"), ("Fifth", "Augmented"), ("Seventh", "Major")],
     "maj7sus2": [("Second", "Major"), ("Fifth", "Perfect"), ("Seventh", "Major")],
     "add11": [("Third", "Major"), ("Fifth", "Perfect"), ("Eleventh", "Perfect")],
     "madd4": [("Third", "Minor"), ("Fourth", "Perfect"), ("Fifth", "Perfect")],
     "mmaj7": [("Third", "Minor"), ("Fifth", "Perfect"), ("Seventh", "Major")],
-    "m6/9": [("Third", "Minor"), ("Fifth", "Perfect"), ("Sixth", "Major"), ("Ninth", "Major")],
-    "11": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Major"), ("Eleventh", "Perfect")],
-    "m11": [("Third", "Minor"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Major"), ("Eleventh", "Perfect")],
-    "13": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Major"), ("Eleventh", "Perfect"), ("Thirteenth", "Major")],
-    "maj13": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Major"), ("Ninth", "Major"), ("Eleventh", "Perfect"), ("Thirteenth", "Major")],
+    "m6/9": [("Third", "Minor"), ("Fifth", "Perfect"), ("Sixth", "Major"), ("Ninth", "Perfect")],
+    "11": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Perfect"), ("Eleventh", "Perfect")],
+    "m11": [("Third", "Minor"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Perfect"), ("Eleventh", "Perfect")],
+    "13": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Perfect"), ("Eleventh", "Perfect"), ("Thirteenth", "Perfect")],
+    "maj13": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Major"), ("Ninth", "Perfect"), ("Eleventh", "Perfect"), ("Thirteenth", "Perfect")],
 }
 
 
