@@ -130,7 +130,9 @@ CHORD_TEMPLATES: dict[str, tuple[tuple[int, ...], str]] = {
     "maj7#5": ((0, 4, 8, 11), "maj7#5"),
     "maj7sus2": ((0, 2, 7, 11), "maj7sus2"),
     "add11": ((0, 4, 5, 7), "add11"),
+    "add11(no5)": ((0, 4, 5), "add11(no5)"),
     "madd4": ((0, 3, 5, 7), "madd4"),
+    "madd11(no5)": ((0, 3, 5), "madd11(no5)"),
     "mmaj7": ((0, 3, 7, 11), "mmaj7"),
     "m6/9": ((0, 2, 3, 7, 9), "m6/9"),
     "11": ((0, 2, 4, 5, 7, 10), "11"),
@@ -967,7 +969,9 @@ DEGREES: dict[str, list[tuple[str, str]]] = {
     "maj7#5": [("Third", "Major"), ("Fifth", "Augmented"), ("Seventh", "Major")],
     "maj7sus2": [("Second", "Major"), ("Fifth", "Perfect"), ("Seventh", "Major")],
     "add11": [("Third", "Major"), ("Fifth", "Perfect"), ("Eleventh", "Perfect")],
+    "add11(no5)": [("Third", "Major"), ("Fifth", "Perfect"), ("Eleventh", "Perfect")],
     "madd4": [("Third", "Minor"), ("Fourth", "Perfect"), ("Fifth", "Perfect")],
+    "madd11(no5)": [("Third", "Minor"), ("Fifth", "Perfect"), ("Eleventh", "Perfect")],
     "mmaj7": [("Third", "Minor"), ("Fifth", "Perfect"), ("Seventh", "Major")],
     "m6/9": [("Third", "Minor"), ("Fifth", "Perfect"), ("Sixth", "Major"), ("Ninth", "Perfect")],
     "11": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Minor"), ("Ninth", "Perfect"), ("Eleventh", "Perfect")],
@@ -1126,11 +1130,16 @@ def _build_chord_item(
     ET.SubElement(chord_el, "KeyNote", {"step": key_step, "accidental": key_acc})
     bass_step, bass_acc = _name_to_gpif(pc_name(chord["bass_pc"], key_root))
     ET.SubElement(chord_el, "BassNote", {"step": bass_step, "accidental": bass_acc})
+    omit_fifth = chord["quality"].endswith("(no5)")
     for interval, alteration in DEGREES.get(chord["quality"], DEGREES["maj"]):
         ET.SubElement(
             chord_el,
             "Degree",
-            {"interval": interval, "alteration": alteration, "omitted": "false"},
+            {
+                "interval": interval,
+                "alteration": alteration,
+                "omitted": "true" if omit_fifth and interval == "Fifth" else "false",
+            },
         )
     return item
 

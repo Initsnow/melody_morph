@@ -491,7 +491,9 @@ def test_auto_keeps_fixed_windows():
         ("maj7#5", [48, 52, 56, 59], "Cmaj7#5"),
         ("maj7sus2", [48, 50, 55, 59], "Cmaj7sus2"),
         ("add11", [48, 52, 53, 55], "Cadd11"),
+        ("add11(no5)", [48, 52, 53], "Cadd11(no5)"),
         ("madd4", [48, 51, 53, 55], "Cmadd4"),
+        ("madd11(no5)", [48, 51, 53], "Cmadd11(no5)"),
         ("mmaj7", [48, 51, 55, 59], "Cmmaj7"),
         ("m6/9", [48, 51, 55, 57, 50], "Cm6/9"),
         ("11", [48, 52, 55, 58, 50, 53], "C11"),
@@ -511,6 +513,22 @@ def test_13_requires_eleventh():
     # 既没有 11 音也没有 13 音时不得叫 13（应退回 9）
     result = detect([48, 52, 55, 58, 50], key_root=0, key_mode="Major")
     assert result["name"] == "C9"
+
+
+def test_add11_no5_arpeggio_and_omitted_fifth():
+    # 主音琶音 F-C-E-C：C 当根音、F 在低音 -> Cadd11(no5)/F（而非 F5）
+    r = detect([53, 60, 64, 60], key_root=0, key_mode="Major")
+    assert r is not None and r["name"] == "Cadd11(no5)/F"
+    # 写回时第五度标记 omitted=true（与 GP8 原生 no5 记法一致）
+    from gpchords.annotate import _build_chord_item
+
+    item = _build_chord_item(0, r, [40, 45, 50, 55, 59, 64], 0)
+    degs = {
+        (d.get("interval"), d.get("alteration")): d.get("omitted")
+        for d in item.findall("Chord/Degree")
+    }
+    assert degs[("Fifth", "Perfect")] == "true"
+    assert degs[("Eleventh", "Perfect")] == "false"
 
 
 def test_slash_bass_double_sharp_spelled_naturally():
