@@ -1367,7 +1367,17 @@ def write_chords_to_gp(
         seen_names.add(chord["name"])
         needed.append(chord)
 
-    existing = {c.name: i for i, c in enumerate(track.chords)}
+    if overwrite:
+        # --overwrite：清空本轨和弦库与编辑用 working set，按本次识别结果
+        # 整体重建，避免旧项/旧度数残留（如旧版 Ninth Major 导致九音显示成 C）。
+        for it in list(coll_el.findall("Item")):
+            coll_el.remove(it)
+        if working_el is not None:
+            for it in list(working_el.findall("Item")):
+                working_el.remove(it)
+        existing: dict[str, int] = {}
+    else:
+        existing = {c.name: i for i, c in enumerate(track.chords)}
     item_count = sum(1 for it in list(coll_el) if it.tag == "Item")
     name_to_index = dict(existing)
     new_names: list[str] = []
@@ -1387,6 +1397,7 @@ def write_chords_to_gp(
 
     # --- 写拍引用 ----------------------------------------------------------
     written = cloned = 0
+    rewritten_beat_ids: set[str] = set()
     for r, voice_el, pos, current_id, beat_el in writable:
         beats_tokens = (voice_el.findtext("Beats") or "").split()
         if len(usage.get(current_id, [])) > 1:
@@ -1405,7 +1416,21 @@ def write_chords_to_gp(
             cloned += 1
 
         _set_beat_chord(beat_el, name_to_index[r["chord"]["name"]])
+        rewritten_beat_ids.add(beat_el.get("id"))
         written += 1
+
+    if overwrite and beats_container is not None:
+        # 清库重建后，本轨未被重写的旧和弦引用会指向不存在的库项，
+        # 一并移除（GP8 从不复用带和弦的 beat，不会误伤其他轨道）。
+        track_beat_ids = {b.id for m in track.measures for b in m.beats}
+        for beat_el in beats_container.findall("Beat"):
+            if beat_el.get("id") not in track_beat_ids:
+                continue
+            if beat_el.get("id") in rewritten_beat_ids:
+                continue
+            chord_el = beat_el.find("Chord")
+            if chord_el is not None:
+                beat_el.remove(chord_el)
 
     # 写新 zip：逐项保留原文件的压缩方式与时间戳，GP8 对 zip 容器结构敏感
     buffer = io.BytesIO()
