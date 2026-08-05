@@ -1162,15 +1162,29 @@ def _set_beat_chord(beat_el: ET.Element, index: int) -> None:
     chord_el.text = str(index)
 
 
-_CDATA_PAIR_RE = re.compile(r"<(\w+)><!\[CDATA\[(.*?)\]\]></\1>", re.S)
+_CDATA_PAIR_RE = re.compile(
+    r"<(\w+)>(\s*)<!\[CDATA\[(.*?)\]\]>(\s*)</\1>", re.S
+)
 
 
-def _cdata_pairs_from(xml_text: str) -> list[tuple[str, str]]:
-    """收集原文件里用 CDATA 包裹过的 (标签, 文本) 对。"""
-    return [(m.group(1), m.group(2)) for m in _CDATA_PAIR_RE.finditer(xml_text)]
+def _cdata_pairs_from(
+    xml_text: str,
+) -> list[tuple[str, str, str, str]]:
+    """收集原文件里用 CDATA 包裹过的 (标签, 文本, 前空白, 后空白)。
+
+    GP8 原生文件的 CDATA 通常前后带换行（``<Letter>\\n<![CDATA[A]]>\\n</Letter>``），
+    旧正则要求紧凑写法，漏掉了所有多行 CDATA，导致写回后段落标记等文本
+    退化为普通文本、GP8 静默丢弃。
+    """
+    return [
+        (m.group(1), m.group(3), m.group(2), m.group(4))
+        for m in _CDATA_PAIR_RE.finditer(xml_text)
+    ]
 
 
-def _restore_cdata(xml_text: str, pairs: list[tuple[str, str]]) -> str:
+def _restore_cdata(
+    xml_text: str, pairs: list[tuple[str, str, str, str]]
+) -> str:
     """
     把 ET 序列化时丢失的 CDATA 包回对应标签。
 
@@ -1180,20 +1194,25 @@ def _restore_cdata(xml_text: str, pairs: list[tuple[str, str]]) -> str:
     <Chord> 数字引用全部恢复为 CDATA（新增的和弦也适用）。
     """
     # 空 CDATA 的元素（如 <SubTitle><![CDATA[]]></SubTitle>）
-    empty_tags = {tag for tag, value in pairs if value == ""}
+    empty_tags = {tag for tag, value, _, _ in pairs if value == ""}
     for tag in empty_tags:
+        xml_text = re.sub(
+            rf"<{tag}>\s*</{tag}>",
+            f"<{tag}><![CDATA[]]></{tag}>",
+            xml_text,
+        )
         xml_text = re.sub(
             rf"<{tag} />",
             f"<{tag}><![CDATA[]]></{tag}>",
             xml_text,
         )
     # 按 (标签, 文本) 精确匹配：ET 序列化时文本里的 & < > 已转义
-    for tag, value in pairs:
+    for tag, value, ws_left, ws_right in pairs:
         if value == "":
             continue
         xml_text = re.sub(
-            rf"<{tag}>{re.escape(html.escape(value, quote=False))}</{tag}>",
-            f"<{tag}><![CDATA[{value}]]></{tag}>",
+            rf"<{tag}>\s*{re.escape(html.escape(value, quote=False))}\s*</{tag}>",
+            f"<{tag}>{ws_left}<![CDATA[{value}]]>{ws_right}</{tag}>",
             xml_text,
         )
     # 拍上的和弦引用：<Chord>CDATA[i]</Chord>

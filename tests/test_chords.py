@@ -596,6 +596,29 @@ def test_degrees_use_gp8_native_alterations():
             ), (quality, interval, alteration)
 
 
+def test_restore_cdata_multiline_gp8_text():
+    # GP8 原生文本（段落标记的 Letter/Text 等）CDATA 前后带换行，
+    # 旧正则漏掉，写回后变成普通文本被 GP8 静默丢弃。
+    import xml.etree.ElementTree as ET
+
+    from gpchords.annotate import _cdata_pairs_from, _restore_cdata
+
+    original = (
+        "<GPIF><MasterBars><MasterBar>"
+        "<Section>\n<Letter>\n<![CDATA[A]]>\n</Letter>\n"
+        "<Text>\n<![CDATA[Intro 1]]>\n</Text>\n</Section>"
+        "</MasterBar></MasterBars></GPIF>"
+    )
+    pairs = _cdata_pairs_from(original)
+    assert ("Letter", "A", "\n", "\n") in pairs
+    assert ("Text", "Intro 1", "\n", "\n") in pairs
+    serialized = ET.tostring(ET.fromstring(original), encoding="unicode")
+    assert "<![CDATA[" not in serialized
+    restored = _restore_cdata(serialized, pairs)
+    assert "<Letter>\n<![CDATA[A]]>\n</Letter>" in restored
+    assert "<Text>\n<![CDATA[Intro 1]]>\n</Text>" in restored
+
+
 # ---------------------------------------------------------------------------
 # 第 5 步：逐小节调性 / 转调
 # ---------------------------------------------------------------------------
