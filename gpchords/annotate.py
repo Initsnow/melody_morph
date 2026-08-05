@@ -108,7 +108,9 @@ CHORD_TEMPLATES: dict[str, tuple[tuple[int, ...], str]] = {
     "m6": ((0, 3, 7, 9), "m6"),
     "7": ((0, 4, 7, 10), "7"),
     "maj7": ((0, 4, 7, 11), "maj7"),
+    "maj7(no3)": ((0, 7, 11), "maj7(no3)"),
     "m7": ((0, 3, 7, 10), "m7"),
+    "m7(no3)": ((0, 7, 10), "m7(no3)"),
     "m7b5": ((0, 3, 6, 10), "m7b5"),
     "dim7": ((0, 3, 6, 9), "dim7"),
     "add9": ((0, 2, 4, 7), "add9"),
@@ -347,10 +349,12 @@ def detect_chord(
             tset = {(pc + root) % 12 for pc in tpl}
             matched = sum(v for pc, v in weights.items() if pc in tset)
             unmatched = total - matched
-            # (no5) 是不完整记法（省略五音）：只在窗口音符恰好都是和弦音时
-            # 启用，避免把 {G,B,C} 从更大的 A 踏板琶音里单独拎出来当根音
-            # （如 A-G-C-G-B-C-G 应判 Am7 而不是 Gadd11(no5)/A）。
-            if quality.endswith("(no5)") and unmatched > 1e-9:
+            # (no5)/(no3) 是不完整记法（省略五音/三音）：只在窗口音符恰好
+            # 都是和弦音时启用，避免把 {G,B,C} 从更大的琶音/踏板里单独
+            # 拎出来当根音（如 A-G-C-G-B-C-G 应判 Am9 而不是 Gadd11(no5)/A）。
+            if (
+                quality.endswith("(no5)") or quality.endswith("(no3)")
+            ) and unmatched > 1e-9:
                 continue
             # 奥卡姆剃刀：缺失的和弦音扣分，且模板每多一个音都付出
             # 小代价——只有音符确实构成 7/9/11/13 和弦时扩展模板才划算。
@@ -953,7 +957,9 @@ DEGREES: dict[str, list[tuple[str, str]]] = {
     "m6": [("Third", "Minor"), ("Fifth", "Perfect"), ("Sixth", "Major")],
     "7": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Minor")],
     "maj7": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Major")],
+    "maj7(no3)": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Major")],
     "m7": [("Third", "Minor"), ("Fifth", "Perfect"), ("Seventh", "Minor")],
+    "m7(no3)": [("Third", "Minor"), ("Fifth", "Perfect"), ("Seventh", "Minor")],
     "m7b5": [("Third", "Minor"), ("Fifth", "Diminished"), ("Seventh", "Minor")],
     "dim7": [("Third", "Minor"), ("Fifth", "Diminished"), ("Seventh", "Diminished")],
     "add9": [("Third", "Major"), ("Fifth", "Perfect"), ("Ninth", "Perfect")],
@@ -1135,7 +1141,11 @@ def _build_chord_item(
     ET.SubElement(chord_el, "KeyNote", {"step": key_step, "accidental": key_acc})
     bass_step, bass_acc = _name_to_gpif(pc_name(chord["bass_pc"], key_root))
     ET.SubElement(chord_el, "BassNote", {"step": bass_step, "accidental": bass_acc})
-    omit_fifth = chord["quality"].endswith("(no5)")
+    omitted_by_interval: dict[str, str] = {}
+    if chord["quality"].endswith("(no3)"):
+        omitted_by_interval["Third"] = "true"
+    if chord["quality"].endswith("(no5)"):
+        omitted_by_interval["Fifth"] = "true"
     for interval, alteration in DEGREES.get(chord["quality"], DEGREES["maj"]):
         ET.SubElement(
             chord_el,
@@ -1143,7 +1153,7 @@ def _build_chord_item(
             {
                 "interval": interval,
                 "alteration": alteration,
-                "omitted": "true" if omit_fifth and interval == "Fifth" else "false",
+                "omitted": omitted_by_interval.get(interval, "false"),
             },
         )
     return item

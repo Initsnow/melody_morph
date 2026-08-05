@@ -553,6 +553,29 @@ def test_add11_no5_does_not_steal_larger_arpeggio():
     assert r is not None and r["name"] == "Am9"
 
 
+def test_maj7_no3_preferred_over_gadd11_no5_when_bass_is_root():
+    # C-G-B（C 低音）：和声是 C 根音（Cmaj7 缺三音），
+    # 不得判成 Gadd11(no5)/C；写回时三度标记 omitted=true。
+    r = detect([48, 55, 59], key_root=0, key_mode="Major")
+    assert r is not None and r["name"] == "Cmaj7(no3)"
+    from gpchords.annotate import _build_chord_item
+
+    item = _build_chord_item(0, r, [40, 45, 50, 55, 59, 64], 0)
+    degs = {
+        (d.get("interval"), d.get("alteration")): d.get("omitted")
+        for d in item.findall("Chord/Degree")
+    }
+    assert degs[("Third", "Major")] == "true"
+    assert degs[("Fifth", "Perfect")] == "false"
+    assert degs[("Seventh", "Major")] == "false"
+
+
+def test_m7_no3():
+    # C-G-Bb（C 低音）-> Cm7(no3)
+    r = detect([48, 55, 58], key_root=0, key_mode="Major")
+    assert r is not None and r["name"] == "Cm7(no3)"
+
+
 def test_slash_bass_double_sharp_spelled_naturally():
     # E7#9 的 #9 低音是 G（理论度数拼写 F##），GP 记法应写成 E7#9/G
     result = detect([43, 52, 56, 59, 62], key_root=9, key_mode="Major")
