@@ -209,25 +209,25 @@ def note_weights(notes: list[GPNote]) -> dict[int, float]:
 
     - 延音延续音符（tie destination）不重复计权；其时长并入同窗内的
       延音起点，保持"实际发声时长"不变。
+    - 跨窗延音（延音起点在上一窗/上一小节）在有其他音符的窗口里也按
+      实际时值计权——它是真实在响的音（如 A-G-C-G-B-C-G 的 A 踏板
+      延进下一小节），不能因为找不到同窗起点就丢掉。
     - 时值为 0 的音符（GP 里的重复引用/装饰音）权重为 0，不再与
       四分音符同权。
     """
+    origin_pcs = {m.midi % 12 for m in notes if m.tie_origin}
     weights: dict[int, float] = defaultdict(float)
     for n in notes:
-        if n.tie_destination:
+        if n.tie_destination and n.midi % 12 in origin_pcs:
             continue
         weights[n.midi % 12] += n.duration_quarters
+    # 把同窗延音目标的时长并入其延音起点（保持"实际发声时长"不变）
     for n in notes:
         if not n.tie_origin:
             continue
         for m in notes:
-            if m.tie_destination and m.midi == n.midi:
+            if m.tie_destination and m.midi % 12 == n.midi % 12:
                 weights[n.midi % 12] += m.duration_quarters
-    if not weights and notes:
-        # 整窗都是延音延续（跨小节延音的承接窗）：没有本窗起点，
-        # 按实际时值计权，识别出延续中的和弦。
-        for n in notes:
-            weights[n.midi % 12] += n.duration_quarters
     return dict(weights)
 
 
@@ -347,6 +347,11 @@ def detect_chord(
             tset = {(pc + root) % 12 for pc in tpl}
             matched = sum(v for pc, v in weights.items() if pc in tset)
             unmatched = total - matched
+            # (no5) 是不完整记法（省略五音）：只在窗口音符恰好都是和弦音时
+            # 启用，避免把 {G,B,C} 从更大的 A 踏板琶音里单独拎出来当根音
+            # （如 A-G-C-G-B-C-G 应判 Am7 而不是 Gadd11(no5)/A）。
+            if quality.endswith("(no5)") and unmatched > 1e-9:
+                continue
             # 奥卡姆剃刀：缺失的和弦音扣分，且模板每多一个音都付出
             # 小代价——只有音符确实构成 7/9/11/13 和弦时扩展模板才划算。
             missing = sum(1 for pc in tpl if (root + pc) % 12 not in present_pcs)

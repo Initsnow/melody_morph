@@ -296,6 +296,21 @@ def test_cross_window_tie_fallback():
     assert result["name"] == "C"
 
 
+def test_cross_window_tie_in_mixed_window_counted():
+    # A3 从上一小节延进来（tie destination），同窗还有其他音符：
+    # 延音目标必须计权（A 踏板不能丢），否则 {G,B,C} 会被误判成
+    # Gadd11(no5)/A，而正确结果是 A 根音的 Am9。
+    notes = [
+        note(45, 0.5, tie_destination=True),  # A3 延音
+        note(55, 0.5), note(60, 0.5), note(55, 0.5),  # G4 C5 G4
+        note(59, 0.5), note(60, 0.5), note(55, 0.5), note(60, 0.5),  # B4 C5 G4 C5
+    ]
+    w = note_weights(notes)
+    assert w[9] == pytest.approx(0.5)
+    r = detect_chord(notes, 0, "Major", "guitar")
+    assert r is not None and r["name"] == "Am9"
+
+
 # ---------------------------------------------------------------------------
 # 第 3 步：auto 切窗
 # ---------------------------------------------------------------------------
@@ -529,6 +544,13 @@ def test_add11_no5_arpeggio_and_omitted_fifth():
     }
     assert degs[("Fifth", "Perfect")] == "true"
     assert degs[("Eleventh", "Perfect")] == "false"
+
+
+def test_add11_no5_does_not_steal_larger_arpeggio():
+    # A-G-C-G-B-C-G（A 踏板，B 是 9 音）：{G,B,C} 只是子集，
+    # 不得判成 Gadd11(no5)/A，应保持 A 根音（Am9）。
+    r = detect([45, 55, 60, 55, 59, 60, 55, 45], key_root=0, key_mode="Major")
+    assert r is not None and r["name"] == "Am9"
 
 
 def test_slash_bass_double_sharp_spelled_naturally():
