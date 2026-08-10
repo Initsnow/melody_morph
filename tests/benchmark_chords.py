@@ -23,7 +23,7 @@ from gpchords.annotate import (
     segment_auto,
     segment_measure,
 )
-from gpchords.parser import GPNote, parse_gp
+from gpreader import GPNote, parse_gp
 
 
 def n(midi: int, dur: float = 1.0) -> GPNote:
@@ -120,7 +120,7 @@ def run_synthetic() -> tuple[int, int]:
 def run_auto_cases() -> tuple[int, int, int]:
     ok_windows = ok_names = 0
     from gpchords.annotate import SEGMENTERS
-    from gpchords.parser import GPBeat, GPMeasure
+    from gpreader import GPBeat, GPMeasure
 
     print("\n=== auto 切窗场景 ===")
     for label, beats, want_n, want_names, *rest in AUTO_CASES:
@@ -245,9 +245,10 @@ def run_real_file(path: Path) -> None:
         got = r["name"] if r else None
         print(f"  小节 {bar}: 期望 {expected:<10} 实际 {got}  {'OK' if got == expected else '--'}")
     # 整小节视图：51 小节仍是 G6/9/E
+    # 注：排除 X 哑音后，整小节视图与主窗口一致，均为 Em
     m51 = next(x for x in measures if x.index == 51)
     r51 = detect_chord(segment_measure(m51)[0].notes, *by_bar[51], "guitar")
-    print(f"  小节 51（整小节视图）: 期望 G6/9/E      实际 {r51['name'] if r51 else None}")
+    print(f"  小节 51（整小节视图）: 期望 Em          实际 {r51['name'] if r51 else None}")
 
 
 def main() -> None:

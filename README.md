@@ -11,7 +11,8 @@ MIDI 旋律处理工具集 - 用于音乐制作中的旋律修改、和弦分配
 | `phrase_compressor.py` | 乐句时间压缩/扩展 | [文档](doc/phrase_compressor.md) |
 | `counterpoint_generator.py` | 根据旋律生成严格对位法旋律 | [文档](doc/counterpoint_generator.md) |
 | `midi_to_ust.py` | MIDI 旋律转调内唱名 UST | [文档](doc/midi_to_ust.md) |
-| `gpchords/` | Guitar Pro 解析与和弦自动标注（`gp-chords` 命令） | [文档](doc/gp_parser.md) |
+| `gpreader/` | Guitar Pro (.gp/.gpx) 独立读取库（解析 GPIF、文件层写回） | [文档](doc/gp_parser.md) |
+| `gpchords/` | 和弦自动标注（`gp-chords`）、调性写入（`gp-key`）等命令 | [文档](doc/gp_parser.md) |
 
 ## 快速开始
 
@@ -43,6 +44,14 @@ uv run python midi_to_ust.py input.mid -o output.ust
 
 # 自动标注和弦：交互选择轨道 -> 识别 -> 自动写回 <原名>_chords.gp（原文件不变）
 uv run gp-chords "song.gp"
+
+# 自动判断调性并补写缺失调号 -> <原名>_key.gp（原文件不变；保留已有调号）
+uv run gp-key "song.gp"
+
+# 重新估计并覆盖已有调号 / 按段落估计（转调谱）/ 强制指定调性
+uv run gp-key "song.gp" --overwrite
+uv run gp-key "song.gp" --per-section
+uv run gp-key "song.gp" --key Am
 
 # 指定轨道；默认按和弦变化自动切窗（--window auto），--no-write 不写回
 uv run gp-chords "song.gp" --track "Lead Guitar" --no-write --debug
@@ -84,6 +93,7 @@ uv run python phrase_compressor.py --help
 uv run python counterpoint_generator.py --help
 uv run python midi_to_ust.py --help
 uv run gp-chords --help
+uv run gp-key --help
 ```
 
 ## 说明

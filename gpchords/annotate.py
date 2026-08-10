@@ -10,7 +10,7 @@
 
 原理:
 
-1. 用 :mod:`gpchords.parser` 解析文件，提取指定轨道的音符与时值。
+1. 用 :mod:`gpreader` 解析文件，提取指定轨道的音符与时值。
 2. 确定调性：优先使用每小节自己的调号（支持中途转调）；没有调号时
    回退全局调号或 Krumhansl-Kessler 键感轮廓估计。
 3. 在每个分析窗口内收集音级（按真实时值加权，延音延续不重复计权，
@@ -57,19 +57,15 @@ from __future__ import annotations
 
 import argparse
 import copy
-import html
-import io
 import json
-import re
 import sys
-import zipfile
 import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from gpchords.parser import (
+from gpreader import (
     GPSong,
     GuitarProError,
     GPBeat,
@@ -79,6 +75,7 @@ from gpchords.parser import (
     parse_gp,
     select_tracks,
 )
+from gpreader.writer import read_gpif, write_gpif
 
 # ---------------------------------------------------------------------------
 # 音乐理论基础
@@ -1202,68 +1199,6 @@ def _set_beat_chord(beat_el: ET.Element, index: int) -> None:
     chord_el.text = str(index)
 
 
-_CDATA_PAIR_RE = re.compile(
-    r"<(\w+)>(\s*)<!\[CDATA\[(.*?)\]\]>(\s*)</\1>", re.S
-)
-
-
-def _cdata_pairs_from(
-    xml_text: str,
-) -> list[tuple[str, str, str, str]]:
-    """收集原文件里用 CDATA 包裹过的 (标签, 文本, 前空白, 后空白)。
-
-    GP8 原生文件的 CDATA 通常前后带换行（``<Letter>\\n<![CDATA[A]]>\\n</Letter>``），
-    旧正则要求紧凑写法，漏掉了所有多行 CDATA，导致写回后段落标记等文本
-    退化为普通文本、GP8 静默丢弃。
-    """
-    return [
-        (m.group(1), m.group(3), m.group(2), m.group(4))
-        for m in _CDATA_PAIR_RE.finditer(xml_text)
-    ]
-
-
-def _restore_cdata(
-    xml_text: str, pairs: list[tuple[str, str, str, str]]
-) -> str:
-    """
-    把 ET 序列化时丢失的 CDATA 包回对应标签。
-
-    GP8 的 GPIFReader 只认 CDATA 形式的文本（实测拍上的 <Chord> 引用若写成
-    普通文本，GP8 会静默丢弃所有和弦标注）。ET 不会输出 CDATA，因此在
-    序列化完成后按原文件的 (标签, 文本) 对逐个恢复；另外把拍上的
-    <Chord> 数字引用全部恢复为 CDATA（新增的和弦也适用）。
-    """
-    # 空 CDATA 的元素（如 <SubTitle><![CDATA[]]></SubTitle>）
-    empty_tags = {tag for tag, value, _, _ in pairs if value == ""}
-    for tag in empty_tags:
-        xml_text = re.sub(
-            rf"<{tag}>\s*</{tag}>",
-            f"<{tag}><![CDATA[]]></{tag}>",
-            xml_text,
-        )
-        xml_text = re.sub(
-            rf"<{tag} />",
-            f"<{tag}><![CDATA[]]></{tag}>",
-            xml_text,
-        )
-    # 按 (标签, 文本) 精确匹配：ET 序列化时文本里的 & < > 已转义
-    for tag, value, ws_left, ws_right in pairs:
-        if value == "":
-            continue
-        xml_text = re.sub(
-            rf"<{tag}>\s*{re.escape(html.escape(value, quote=False))}\s*</{tag}>",
-            f"<{tag}>{ws_left}<![CDATA[{value}]]>{ws_right}</{tag}>",
-            xml_text,
-        )
-    # 拍上的和弦引用：<Chord>CDATA[i]</Chord>
-    xml_text = re.sub(
-        r"<Chord>(\d+)</Chord>",
-        r"<Chord><![CDATA[\1]]></Chord>",
-        xml_text,
-    )
-    return xml_text
-
-
 def _find_anchor_beat(
     measure: Optional[GPMeasure], result: dict
 ) -> Optional[GPBeat]:
@@ -1357,11 +1292,7 @@ def write_chords_to_gp(
     - 每个分析窗口挂到该窗口的第一个有音符的拍上。
     - 已有手工标注的小节默认跳过（--overwrite 时强制覆盖）。
     """
-    with zipfile.ZipFile(input_path) as zin:
-        zin_infos = zin.infolist()
-        file_data = {i.filename: zin.read(i.filename) for i in zin_infos}
-    gpif_name = "Content/score.gpif" if "Content/score.gpif" in file_data else "score.gpif"
-    root = ET.fromstring(file_data[gpif_name])
+    root, _ = read_gpif(input_path)
 
     track_el = next(
         (t for t in root.findall("Tracks/Track") if t.get("id") == str(track.id)),
@@ -1506,25 +1437,7 @@ def write_chords_to_gp(
                 beat_el.remove(chord_el)
 
     # 写新 zip：逐项保留原文件的压缩方式与时间戳，GP8 对 zip 容器结构敏感
-    buffer = io.BytesIO()
-    xml_text = ET.tostring(root, encoding="unicode")
-    xml_text = _restore_cdata(
-        xml_text, _cdata_pairs_from(file_data[gpif_name].decode("utf-8"))
-    )
-    xml_bytes = (
-        '<?xml version="1.0" encoding="utf-8"?>\n'.encode("utf-8") + xml_text.encode("utf-8")
-    )
-    with zipfile.ZipFile(buffer, "w") as zout:
-        for info in zin_infos:
-            content = xml_bytes if info.filename == gpif_name else file_data[info.filename]
-            new_info = zipfile.ZipInfo(info.filename, date_time=info.date_time)
-            new_info.compress_type = info.compress_type
-            new_info.external_attr = info.external_attr
-            if info.extra:
-                new_info.extra = info.extra
-            zout.writestr(new_info, content)
-    with open(output_path, "wb") as f:
-        f.write(buffer.getvalue())
+    write_gpif(input_path, output_path, root)
 
     # 用解析器验证写回结果
     verify_song = parse_gp(output_path)
@@ -1828,7 +1741,7 @@ def run_analysis(args) -> list[dict]:
 
 def demo() -> None:
     """不依赖文件，用示例音符演示和弦识别。"""
-    from gpchords.parser import GPNote
+    from gpreader import GPNote
 
     def n(midi: int, dur: float = 1.0) -> GPNote:
         name = _SHARP_NAMES[midi % 12] + str(midi // 12 - 1)

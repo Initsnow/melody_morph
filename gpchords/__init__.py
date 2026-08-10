@@ -1,29 +1,5 @@
-"""Guitar Pro (.gp/.gpx) 解析与和弦自动标注。"""
+"""Guitar Pro 分析和标注包。
 
-from gpchords.parser import (
-    GPBeat,
-    GPChord,
-    GPMeasure,
-    GPNote,
-    GPSong,
-    GPTrack,
-    GuitarProError,
-    detect_format,
-    parse_gp,
-    select_track,
-    select_tracks,
-)
-
-__all__ = [
-    "GPBeat",
-    "GPChord",
-    "GPMeasure",
-    "GPNote",
-    "GPSong",
-    "GPTrack",
-    "GuitarProError",
-    "detect_format",
-    "parse_gp",
-    "select_track",
-    "select_tracks",
-]
+读取 GP 文件请用独立的 :mod:`gpreader` 库；本包负责和弦识别、调性估计
+与写回（``gp-chords`` / ``gp-info`` / ``gp-key`` 命令）。
+"""

@@ -28,7 +28,7 @@ from gpchords.annotate import (
     segment_auto,
     segment_measure,
 )
-from gpchords.parser import (
+from gpreader import (
     GPSong,
     GPBeat,
     GPMeasure,
@@ -726,7 +726,7 @@ def test_restore_cdata_multiline_gp8_text():
     # 旧正则漏掉，写回后变成普通文本被 GP8 静默丢弃。
     import xml.etree.ElementTree as ET
 
-    from gpchords.annotate import _cdata_pairs_from, _restore_cdata
+    from gpreader.writer import cdata_pairs_from, restore_cdata
 
     original = (
         "<GPIF><MasterBars><MasterBar>"
@@ -734,12 +734,12 @@ def test_restore_cdata_multiline_gp8_text():
         "<Text>\n<![CDATA[Intro 1]]>\n</Text>\n</Section>"
         "</MasterBar></MasterBars></GPIF>"
     )
-    pairs = _cdata_pairs_from(original)
+    pairs = cdata_pairs_from(original)
     assert ("Letter", "A", "\n", "\n") in pairs
     assert ("Text", "Intro 1", "\n", "\n") in pairs
     serialized = ET.tostring(ET.fromstring(original), encoding="unicode")
     assert "<![CDATA[" not in serialized
-    restored = _restore_cdata(serialized, pairs)
+    restored = restore_cdata(serialized, pairs)
     assert "<Letter>\n<![CDATA[A]]>\n</Letter>" in restored
     assert "<Text>\n<![CDATA[Intro 1]]>\n</Text>" in restored
 

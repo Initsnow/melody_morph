@@ -10,8 +10,12 @@ PyGuitarPro 明确只支持 GP3-5；AlphaTab（C#/JS）虽支持更多格式但�
 因此对 `.gp` 这类格式，自写解析器是合理选择——它的数据不是晦涩的二进制，
 而是 **zip 压缩包 + 一份 XML（`Content/score.gpif`）**，解析门槛很低。
 
-本仓库的 `gpchords.parser` 就是针对这一格式的实现（GP6 的 `.gpx` 结构相同，也可解析）。
+本仓库的 `gpreader` 就是针对这一格式的独立读取库（GP6 的 `.gpx` 结构相同，也可解析）。
 检测到 GP3-5 时它会给出提示并建议使用 PyGuitarPro，而不是报一个莫名其妙的错。
+
+它只负责"读"，不掺和弦识别、调性估计等音乐判断——那些在 `gpchords` 包里
+（`gp-chords` 标注和弦、`gp-key` 写入调号）。GP 文件的文件层写回（替换
+`score.gpif` 并保留 zip 元数据）也收在 `gpreader.writer` 里。
 
 ## 格式原理
 
@@ -43,13 +47,13 @@ GPIF
   每项是一个 `Item id="N" name="C/F"`，内含和弦构成（根音/低音/音级）与指板图。
 - **拍上的引用**：`Beat > Chord` 是 CDATA 数字，指向该轨道和弦库的第 N 项。
 
-`gpchords.parser` 把这两层都解出来：`GPTrack.chords` 是和弦库，
+`gpreader` 把这两层都解出来：`GPTrack.chords` 是和弦库，
 `GPBeat.chord` 是具体某一拍挂的和弦。
 
 ## 解析器 API
 
 ```python
-from gpchords import parse_gp, select_track, detect_format
+from gpreader import parse_gp, select_track, detect_format
 
 fmt, version = detect_format("song.gp")      # ("gp", "7.0")
 song = parse_gp("song.gp")
@@ -72,9 +76,9 @@ for measure in track.measures:
 
 ## 命令行
 
-`gpchords` 包提供两个命令：`gp-chords`（自动标注，用户入口）和 `gp-info`
-（查看内部结构，调试用）。解析器本身是纯库（`from gpchords import parse_gp`），
-不提供用户命令。
+`gpreader` 是纯读取库（`from gpreader import parse_gp`），不提供用户命令；
+`gpchords` 包在其上提供三个命令：`gp-info`（查看内部结构，调试用）、
+`gp-chords`（自动标注和弦，用户入口）和 `gp-key`（自动判断调性并写入调号）。
 
 ### 查看轨道内容
 
@@ -127,6 +131,24 @@ uv run gp-chords "song.gp" --key "Am" --style theory
 # 不依赖文件，看算法演示
 uv run gp-chords --demo
 ```
+
+### 自动判断调性并写入调号
+
+```bash
+# 估计全局调性并补写缺失调号（默认保留已有调号）-> <原名>_key.gp
+uv run gp-key "song.gp"
+
+# 重新估计并覆盖已有调号 / 按段落估计 / 强制指定调性
+uv run gp-key "song.gp" --overwrite
+uv run gp-key "song.gp" --per-section
+uv run gp-key "song.gp" --key Am
+
+# 只用指定轨道估计；只看结果不写回
+uv run gp-key "song.gp" --track "Lead Guitar"
+uv run gp-key "song.gp" --no-write
+```
+
+原理与限制见 [gp_key.md](gp_key.md)。
 
 ## 和弦识别算法
 

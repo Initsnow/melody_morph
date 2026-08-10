@@ -1,5 +1,5 @@
 """
-查看 Guitar Pro (.gp / .gpx) 文件内容
+查看 Guitar Pro (.gp / .gpx) 文件内容（读取库: :mod:`gpreader`）
 ======================================
 
 用法::
@@ -19,7 +19,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from gpchords.parser import GuitarProError, parse_gp, select_track
+from gpreader import GPTrack, GuitarProError, parse_gp, select_track
 
 
 def print_summary(song) -> None:
@@ -71,6 +71,12 @@ def print_track(track: GPTrack, chords_only: bool) -> None:
 
 
 def main() -> None:
+    # Windows GBK 控制台打印轨道名（可能含 Ø 等字符）会抛 UnicodeEncodeError
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     parser = argparse.ArgumentParser(description="查看 Guitar Pro 文件中的轨道、音符与和弦标注")
     parser.add_argument("file", help=".gp / .gpx 文件路径")
     parser.add_argument("--track", help="轨道名称或索引（默认只显示概览）")

@@ -1,6 +1,6 @@
 """
-Guitar Pro (.gp / .gpx) 解析器
-==============================
+Guitar Pro (.gp / .gpx) 读取库
+=============================
 
 支持 Guitar Pro 7/8 的 ``.gp`` 格式（以及结构相同的 Guitar Pro 6 ``.gpx``）。
 这类文件本质上是 zip 压缩包，乐谱数据保存在 ``Content/score.gpif``（XML）。
@@ -10,10 +10,13 @@ PyGuitarPro（``uv add PyGuitarPro``），本模块检测到旧格式时会给�
 
 作为库使用::
 
-    from gpchords import parse_gp
+    from gpreader import parse_gp
     song = parse_gp("xxx.gp")
     for track in song.tracks:
         print(track.name, len(track.notes))
+
+这是独立于和弦分析的 GP 文件读取库：只负责把 GPIF 解析成数据模型，
+不做任何音乐判断（和弦识别、调性估计在 gpchords 包里）。
 """
 
 from __future__ import annotations
@@ -515,6 +518,45 @@ def _key_name(mb: Optional[ET.Element]) -> Optional[str]:
     pc = (major_pc + 9) % 12 if mode == "Minor" else major_pc
     names = _FLAT_NAMES if count < 0 else _SHARP_NAMES
     return names[pc] + ("m" if mode == "Minor" else "")
+
+
+def key_signature(root_pc: int, mode: str = "Major") -> tuple[int, str]:
+    """
+    调性 (根音音级, Major|Minor) -> GPIF 的 <Key> 内容 (AccidentalCount, Mode)。
+
+    升号数为正、降号数为负，与 GP 自身写法一致。等音拼写取调号较少的
+    写法（如 Db 而非 C#），调号数相同时取升号（如 F# 而非 Gb）。
+    """
+    mode_name = "Minor" if mode == "Minor" else "Major"
+    if mode not in ("Major", "Minor"):
+        raise ValueError(f"不支持的调式: {mode!r}（应为 Major 或 Minor）")
+    major_pc = (root_pc + 3) % 12 if mode == "Minor" else root_pc % 12
+    candidates = [
+        i for i, pc in enumerate(_CIRCLE_SHARP) if pc == major_pc
+    ] + [
+        -i for i, pc in enumerate(_CIRCLE_FLAT) if pc == major_pc
+    ]
+    if not candidates:
+        raise ValueError(f"无法映射调性根音: {root_pc} ({mode})")
+    count = min(candidates, key=lambda c: (abs(c), 0 if c >= 0 else 1))
+    return count, mode_name
+
+
+def key_name(root_pc: int, mode: str = "Major") -> str:
+    """调性 -> 规范名称（与 :func:`key_signature` 的写法一致）。
+
+    如 ``key_name(6, "Major") == "F#"``、``key_name(8, "Minor") == "G#m"``、
+    ``key_name(10, "Major") == "Bb"``。
+    """
+    count, mode_name = key_signature(root_pc, mode)
+    if count >= 0:
+        major_pc = _CIRCLE_SHARP[count]
+        names = _SHARP_NAMES
+    else:
+        major_pc = _CIRCLE_FLAT[-count]
+        names = _FLAT_NAMES
+    pc = (major_pc + 9) % 12 if mode_name == "Minor" else major_pc
+    return names[pc] + ("m" if mode_name == "Minor" else "")
 
 
 def _section_name(mb: Optional[ET.Element]) -> Optional[str]:

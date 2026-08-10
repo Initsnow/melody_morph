@@ -1,0 +1,116 @@
+"""GPIF 写回工具：读入/替换 .gp/.gpx 里的 ``Content/score.gpif``。
+
+只做文件层操作（保留 zip 元数据、恢复 GP8 要求的 CDATA 写法），
+不包含任何音乐逻辑。gpchords 的和弦/调性写回都建立在它之上。
+"""
+
+from __future__ import annotations
+
+import html
+import io
+import re
+import zipfile
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+
+_CDATA_PAIR_RE = re.compile(
+    r"<(\w+)>(\s*)<!\[CDATA\[(.*?)\]\]>(\s*)</\1>", re.S
+)
+
+
+def cdata_pairs_from(xml_text: str) -> list[tuple[str, str, str, str]]:
+    """收集原文件里用 CDATA 包裹过的 (标签, 文本, 前空白, 后空白)。
+
+    GP8 原生文件的 CDATA 通常前后带换行（``<Letter>\\n<![CDATA[A]]>\\n</Letter>``），
+    旧正则要求紧凑写法，漏掉了所有多行 CDATA，导致写回后段落标记等文本
+    退化为普通文本、GP8 静默丢弃。
+    """
+    return [
+        (m.group(1), m.group(3), m.group(2), m.group(4))
+        for m in _CDATA_PAIR_RE.finditer(xml_text)
+    ]
+
+
+def restore_cdata(xml_text: str, pairs: list[tuple[str, str, str, str]]) -> str:
+    """
+    把 ET 序列化时丢失的 CDATA 包回对应标签。
+
+    GP8 的 GPIFReader 只认 CDATA 形式的文本（实测拍上的 <Chord> 引用若写成
+    普通文本，GP8 会静默丢弃所有和弦标注）。ET 不会输出 CDATA，因此在
+    序列化完成后按原文件的 (标签, 文本) 对逐个恢复；另外把拍上的
+    <Chord> 数字引用全部恢复为 CDATA（新增的和弦也适用）。
+    """
+    # 空 CDATA 的元素（如 <SubTitle><![CDATA[]]></SubTitle>）
+    empty_tags = {tag for tag, value, _, _ in pairs if value == ""}
+    for tag in empty_tags:
+        xml_text = re.sub(
+            rf"<{tag}>\s*</{tag}>",
+            f"<{tag}><![CDATA[]]></{tag}>",
+            xml_text,
+        )
+        xml_text = re.sub(
+            rf"<{tag} />",
+            f"<{tag}><![CDATA[]]></{tag}>",
+            xml_text,
+        )
+    # 按 (标签, 文本) 精确匹配：ET 序列化时文本里的 & < > 已转义
+    for tag, value, ws_left, ws_right in pairs:
+        if value == "":
+            continue
+        xml_text = re.sub(
+            rf"<{tag}>\s*{re.escape(html.escape(value, quote=False))}\s*</{tag}>",
+            f"<{tag}>{ws_left}<![CDATA[{value}]]>{ws_right}</{tag}>",
+            xml_text,
+        )
+    # 拍上的和弦引用：<Chord>CDATA[i]</Chord>
+    xml_text = re.sub(
+        r"<Chord>(\d+)</Chord>",
+        r"<Chord><![CDATA[\1]]></Chord>",
+        xml_text,
+    )
+    return xml_text
+
+
+def read_gpif(input_path: str | Path) -> tuple[ET.Element, str]:
+    """读入原始 GPIF XML 树，返回 (根元素, 文件名)。"""
+    with zipfile.ZipFile(input_path) as zin:
+        names = zin.namelist()
+        gpif_name = (
+            "Content/score.gpif" if "Content/score.gpif" in names else "score.gpif"
+        )
+        xml_bytes = zin.read(gpif_name)
+    return ET.fromstring(xml_bytes), gpif_name
+
+
+def write_gpif(input_path: str | Path, output_path: str | Path, root: ET.Element) -> None:
+    """把修改后的 GPIF XML 树写回新的 .gp/.gpx 文件（原文件不动）。
+
+    逐项保留原 zip 的压缩方式、时间戳与 extra 属性——GP8 对 zip 容器结构敏感。
+    """
+    with zipfile.ZipFile(input_path) as zin:
+        infos = zin.infolist()
+        file_data = {i.filename: zin.read(i.filename) for i in infos}
+    gpif_name = (
+        "Content/score.gpif" if "Content/score.gpif" in file_data else "score.gpif"
+    )
+    xml_text = ET.tostring(root, encoding="unicode")
+    xml_text = restore_cdata(
+        xml_text, cdata_pairs_from(file_data[gpif_name].decode("utf-8"))
+    )
+    xml_bytes = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'.encode("utf-8")
+        + xml_text.encode("utf-8")
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zout:
+        for info in infos:
+            content = xml_bytes if info.filename == gpif_name else file_data[info.filename]
+            new_info = zipfile.ZipInfo(info.filename, date_time=info.date_time)
+            new_info.compress_type = info.compress_type
+            new_info.external_attr = info.external_attr
+            if info.extra:
+                new_info.extra = info.extra
+            zout.writestr(new_info, content)
+    with open(output_path, "wb") as f:
+        f.write(buffer.getvalue())
