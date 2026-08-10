@@ -678,6 +678,45 @@ def test_m7_no3():
     assert r is not None and r["name"] == "Cm7(no3)"
 
 
+def test_m7_no5_template_registered():
+    assert "m7(no5)" in CHORD_TEMPLATES
+    assert "m7(no5)" in DEGREES
+
+
+def test_m7_no5_preferred_over_sixth_without_fifth():
+    # D-F-C（缺 A）：F6/D 需要 A，不能成立，应为 Dm7(no5)
+    r = detect([50, 53, 60], key_root=5, key_mode="Major")
+    assert r is not None and r["name"] == "Dm7(no5)"
+    # G-Bb-F（缺 D）同理 -> Gm7(no5)
+    r2 = detect([43, 58, 65, 70], key_root=5, key_mode="Major")
+    assert r2 is not None and r2["name"] == "Gm7(no5)"
+    # Bb-Db-Ab（Bbm7 缺五音 F 的吉他声部）-> Bbm7(no5)
+    r3 = detect([46, 58, 61, 68], key_root=5, key_mode="Major")
+    assert r3 is not None and r3["name"] == "Bbm7(no5)"
+
+
+def test_m7_always_preferred_over_sixth_on_same_notes():
+    # D F A C 是 Dm7 / F6 的同音集：无论调性、无论低音在 D 还是 F，
+    # 按吉他谱习惯一律取 m7 读法（与 test_detect_chord_core 的 Dm7/F 一致）
+    r = detect([38, 50, 53, 57, 60], key_root=5, key_mode="Major")  # 低音 D
+    assert r is not None and r["name"] == "Dm7"
+    r2 = detect([41, 50, 57, 60], key_root=2, key_mode="Minor")  # 低音 F
+    assert r2 is not None and r2["name"] == "Dm7/F"
+
+
+def test_dominant_seventh_without_seventh_loses_to_implied_root():
+    # C-C#-E-G（低音 C#，连续扫弦）：C7b9 缺 b7(Bb) 而根音 C 在场；
+    # A7#9 缺根音 A 而 7 音 G 在场。缺 7 音比缺根音更可疑 -> A7#9/C#。
+    # （音值取真实扫弦量级，避免单次音符的常数惩罚占优）
+    r = detect(
+        [61, 64, 67, 72],
+        key_root=5,
+        key_mode="Major",
+        durs=[2.0, 2.0, 2.0, 2.0],
+    )
+    assert r is not None and r["name"] == "A7#9/C#"
+
+
 def test_slash_bass_double_sharp_spelled_naturally():
     # E7#9 的 #9 低音是 G（理论度数拼写 F##），GP 记法应写成 E7#9/G
     result = detect([43, 52, 56, 59, 62], key_root=9, key_mode="Major")

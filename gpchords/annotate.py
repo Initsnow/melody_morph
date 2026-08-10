@@ -14,9 +14,9 @@
 2. 确定调性：优先使用每小节自己的调号（支持中途转调）；没有调号时
    回退全局调号或 Krumhansl-Kessler 键感轮廓估计。
 3. 在每个分析窗口内收集音级（按真实时值加权，延音延续不重复计权，
-   低音音级放大），对 39 种和弦模板（大/小/属/挂留/强力和弦等）打分：
-   命中音加分、非和弦音扣分、缺失和弦音扣分；调性只用于拼写与
-   极小破平，最终取最高分。
+   低音音级放大），对 46 种和弦模板（大/小/属/挂留/强力和弦等）打分：
+   命中音加分、非和弦音扣分、缺失和弦音扣分（七和弦缺 7 音额外扣分）；
+   m7/6 同音集时一律取 m7 读法；调性只用于拼写与极小破平，最终取最高分。
 4. 吉他风格下，没有三音时收敛成强力和弦（5），低音不是根音时写成
    斜杠和弦（如 ``C5/G``），与 Guitar Pro 里的常见记法一致。
 5. ``--write`` 可以把识别结果写回一个新的 ``.gp`` 文件：向目标轨道的
@@ -84,8 +84,18 @@ from gpreader.writer import read_gpif, write_gpif
 # 打分系数（第 2 步：统一收进常量表）
 UNMATCHED_PENALTY = 0.8  # 非和弦音扣分系数
 MISSING_PENALTY = 1.0  # 和弦音缺失扣分（每个缺失音级）
+MISSING_SEVENTH_PENALTY = 0.5  # 七和弦缺 7 音额外扣分：7 音决定属/大七身份，
+# 省略它比省略根音更可疑（吉他声部省略根音很常见，如 A7#9 只弹 C#-E-G-C）
 COMPLEXITY_PENALTY = 0.5  # 奥卡姆剃刀：模板每多一个音付出的代价
 BASS_WEIGHT_MULTIPLIER = 2.0  # 低音音级权重放大（低音定根音）
+
+# m7 与 6 是同一组音级的不同读法（D F A C = Dm7 / F6）：按吉他谱习惯
+# 一律取 m7 读法（Am7 不得写成 C6/A、Dm7/F 不得写成 F6），与调性无关。
+# 只有 m7/6 这一对会形成完全同音集的同分（其余 no3/no5 变体靠分数区分），
+# 因此家族偏好只作用于这两个品质，避免抢走 C-Eb-F 的 Cmadd11(no5) 等
+# 低音=根音的判定。
+_M7_FAMILY = {"m7"}
+_SIXTH_FAMILY = {"6"}
 
 # auto 切窗：某组音符权重不足小节总权重该比例时并入相邻组（视为经过音）
 WINDOW_MIN_SHARE = 0.2
@@ -110,6 +120,7 @@ CHORD_TEMPLATES: dict[str, tuple[tuple[int, ...], str]] = {
     "maj7(no3)": ((0, 7, 11), "maj7(no3)"),
     "m7": ((0, 3, 7, 10), "m7"),
     "m7(no3)": ((0, 7, 10), "m7(no3)"),
+    "m7(no5)": ((0, 3, 10), "m7(no5)"),
     "m7b5": ((0, 3, 6, 10), "m7b5"),
     "dim7": ((0, 3, 6, 9), "dim7"),
     "add9": ((0, 2, 4, 7), "add9"),
@@ -324,9 +335,11 @@ def detect_chord(
     """
     识别一段音符最可能的和弦。
 
-    打分：命中音加分 - 非和弦音扣分 - 缺失和弦音扣分。
+    打分：命中音加分 - 非和弦音扣分 - 缺失和弦音扣分（七和弦缺 7 音
+    另有额外扣分）。
     调性（主音/调内）不参与主分数，只作为同分时的极小破平；
-    低音音级在计权时放大，且低音等于根音在同分时优先。
+    低音音级在计权时放大，且低音等于根音在同分时优先；
+    m7 与 6 是同一组音的不同读法（Dm7 = F6），同分时一律取 m7 读法。
 
     证据门槛：单音无法确定和弦，返回 None；双音只有纯五度
     （强力和弦）可以确定，其余双音（三度/七度/二度等）同样返回 None，
@@ -374,34 +387,59 @@ def detect_chord(
             # 奥卡姆剃刀：缺失的和弦音扣分，且模板每多一个音都付出
             # 小代价——只有音符确实构成 7/9/11/13 和弦时扩展模板才划算。
             missing = sum(1 for pc in tpl if (root + pc) % 12 not in present_pcs)
+            # 七和弦缺 7 音额外扣分：属七/大七的身份由 7 音决定，
+            # 缺根音（如 A7#9 只弹 C#-E-G-C）远比缺 7 音可信。
+            seventh = 10 if 10 in tpl else (11 if 11 in tpl else None)
+            seventh_penalty = (
+                MISSING_SEVENTH_PENALTY
+                if seventh is not None
+                and (root + seventh) % 12 not in present_pcs
+                else 0.0
+            )
             score = (
                 matched
                 - UNMATCHED_PENALTY * unmatched
                 - MISSING_PENALTY * missing
+                - seventh_penalty
                 - COMPLEXITY_PENALTY * len(tpl)
             )
             if key_pcs is not None and root in key_pcs:
                 key_rank = 2 if root == key_root else 1
             else:
                 key_rank = 0
+            family = 2 if quality in _M7_FAMILY else (
+                0 if quality in _SIXTH_FAMILY else 1
+            )
             candidates.append(
-                (score, raw.get(root, 0.0), key_rank, bass_pc == root, root, quality, suffix, tset)
+                (
+                    score,
+                    family,
+                    key_rank,
+                    bass_pc == root,
+                    raw.get(root, 0.0),
+                    root,
+                    quality,
+                    suffix,
+                    tset,
+                )
             )
 
-    # 排序：分数 > 调内/主音破平 > 低音=根音 > 根音出现权重 > 模板更简单 > 根音编号更小
+    # 排序：分数 > m7/6 家族偏好 > 调内/主音破平 > 低音=根音 > 根音出现权重
+    # > 模板更简单 > 根音编号更小
     # 调性只做极小破平：不参与主分数，仅在同分时先看调内/主音。
     candidates.sort(
         key=lambda c: (
             c[0],
+            c[1],
             c[2],
             c[3],
-            c[1],
-            -len(CHORD_TEMPLATES[c[5]][0]),
-            -c[4],
+            c[4],
+            -len(CHORD_TEMPLATES[c[6]][0]),
+            -c[5],
         ),
         reverse=True,
     )
-    score, _, _, _, root, quality, suffix, tset = candidates[0]
+    score, _, _, _, _, root, quality, suffix, tset = candidates[0]
 
     matched_pcs = {pc for pc in weights if pc in tset}
     if style == "guitar" and quality != "5" and matched_pcs <= {root, (root + 7) % 12}:
@@ -987,6 +1025,7 @@ DEGREES: dict[str, list[tuple[str, str]]] = {
     "maj7(no3)": [("Third", "Major"), ("Fifth", "Perfect"), ("Seventh", "Major")],
     "m7": [("Third", "Minor"), ("Fifth", "Perfect"), ("Seventh", "Minor")],
     "m7(no3)": [("Third", "Minor"), ("Fifth", "Perfect"), ("Seventh", "Minor")],
+    "m7(no5)": [("Third", "Minor"), ("Fifth", "Perfect"), ("Seventh", "Minor")],
     "m7b5": [("Third", "Minor"), ("Fifth", "Diminished"), ("Seventh", "Minor")],
     "dim7": [("Third", "Minor"), ("Fifth", "Diminished"), ("Seventh", "Diminished")],
     "add9": [("Third", "Major"), ("Fifth", "Perfect"), ("Ninth", "Perfect")],
