@@ -135,11 +135,10 @@ uv run gp-chords --demo
 ### 自动判断调性并写入调号
 
 ```bash
-# 估计全局调性并补写缺失调号（默认保留已有调号）-> <原名>_key.gp
+# 估计全局调性并写入全部小节 -> <原名>_key.gp（原文件不变）
 uv run gp-key "song.gp"
 
-# 重新估计并覆盖已有调号 / 按段落估计 / 强制指定调性
-uv run gp-key "song.gp" --overwrite
+# 按段落估计 / 强制指定调性
 uv run gp-key "song.gp" --per-section
 uv run gp-key "song.gp" --key Am
 

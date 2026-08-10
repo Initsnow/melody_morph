@@ -45,11 +45,10 @@ uv run python midi_to_ust.py input.mid -o output.ust
 # 自动标注和弦：交互选择轨道 -> 识别 -> 自动写回 <原名>_chords.gp（原文件不变）
 uv run gp-chords "song.gp"
 
-# 自动判断调性并补写缺失调号 -> <原名>_key.gp（原文件不变；保留已有调号）
+# 自动判断调性并写入全部小节 -> <原名>_key.gp（原文件不变）
 uv run gp-key "song.gp"
 
-# 重新估计并覆盖已有调号 / 按段落估计（转调谱）/ 强制指定调性
-uv run gp-key "song.gp" --overwrite
+# 按段落估计（转调谱）/ 强制指定调性
 uv run gp-key "song.gp" --per-section
 uv run gp-key "song.gp" --key Am
 

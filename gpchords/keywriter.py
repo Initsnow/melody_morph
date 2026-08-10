@@ -5,18 +5,14 @@
 解析 .gp / .gpx 后，用 Krumhansl-Kessler 键感轮廓对所选轨道的音符
 （按时值加权）估计调性，再把 <Key> 调号写进每个 MasterBar。
 
-默认保留文件里已有的调号，只给缺失调号的小节估计并补写（和 gp-chords
-保留手工标注的约定一致）；--overwrite 重新估计并覆盖全部小节；
---per-section 按段落分别估计并写入；--key 直接指定调性而不估计，
-并写入全部小节（等音写法按规范取调号较少者，如 Db 而非 C#）。
+默认把估计出的调性写入**全部小节**（覆盖原有调号）；输出是新的
+<原名>_key.gp，原文件不会被修改。--per-section 按段落分别估计并写入；
+--key 直接指定调性而不估计（等音写法按规范取调号较少者，如 Db 而非 C#）。
 
 用法::
 
-    # 估计全局调性并补写缺失调号 -> <原名>_key.gp（原文件不变）
+    # 估计调性并写入全部小节 -> <原名>_key.gp（原文件不变）
     uv run gp-key "song.gp"
-
-    # 重新估计并覆盖已有调号（默认保留已有调号，只补缺失小节）
-    uv run gp-key "song.gp" --overwrite
 
     # 按段落估计并写入（转调谱）
     uv run gp-key "song.gp" --per-section
@@ -209,7 +205,6 @@ def run_analysis(args) -> dict:
         global_key = estimate_song_key(tracks)
 
     per_section = bool(args.per_section and not args.key)
-    overwrite = bool(args.overwrite or args.key)
     section_keys: dict[Optional[str], tuple[int, str]] = {}
     keys_by_bar: dict[int, tuple[int, str]] = {}
     if per_section:
@@ -249,15 +244,12 @@ def run_analysis(args) -> dict:
             output_path,
             keys_by_bar,
             default_key=global_key,
-            fill_only=not overwrite,
         )
         print(f"写回完成: {output_path}")
         print(
-            f"  调号写入 {stats['written']} 个小节 | 保留 {stats['skipped']} | "
+            f"  调号写入 {stats['written']} 个小节 | 未改动 {stats['skipped']} | "
             f"共 {stats['bars']} 个小节"
         )
-        if not overwrite:
-            print("  （默认保留已有调号；--overwrite 可重新估计并覆盖全部小节）")
         print(
             f"  自检: 输出文件 {stats['verified_match']}/"
             f"{stats['verified_total']} 个写入小节调号一致"
@@ -304,10 +296,6 @@ def main() -> None:
     parser.add_argument(
         "--per-section", action="store_true",
         help="按段落分别估计并写入（无段落标记的小节用全局估计兜底）",
-    )
-    parser.add_argument(
-        "--overwrite", action="store_true",
-        help="重新估计并覆盖已有调号（默认保留已有调号，只补缺失小节）",
     )
     parser.add_argument("--write", metavar="OUT.gp", help="输出路径（默认 <原名>_key.gp）")
     parser.add_argument("--no-write", action="store_true", help="只估计/打印，不写回")
