@@ -75,14 +75,31 @@ def test_chromatic_roots():
 
 
 def test_minor_key():
-    assert chord_to_roman(chord("Am", 9, "min"), 9, "Minor") == "i"
-    assert chord_to_roman(chord("C", 0, "maj"), 9, "Minor") == "III"
-    assert chord_to_roman(chord("Dm", 2, "min"), 9, "Minor") == "iv"
-    assert chord_to_roman(chord("Em", 4, "min"), 9, "Minor") == "v"
-    assert chord_to_roman(chord("G", 7, "maj"), 9, "Minor") == "VII"
-    assert chord_to_roman(chord("Bdim", 11, "dim"), 9, "Minor") == "ii°"
-    # 自然小调里导音升半音 -> #vii
-    assert chord_to_roman(chord("G#dim", 8, "dim"), 9, "Minor") == "#vii°"
+    """小调默认按关系大调记：A 小调视作 C 大调，Am -> vi。"""
+    assert chord_to_roman(chord("Am", 9, "min"), 9, "Minor") == "vi"
+    assert chord_to_roman(chord("C", 0, "maj"), 9, "Minor") == "I"
+    assert chord_to_roman(chord("Dm", 2, "min"), 9, "Minor") == "ii"
+    assert chord_to_roman(chord("Em", 4, "min"), 9, "Minor") == "iii"
+    assert chord_to_roman(chord("E", 4, "maj"), 9, "Minor") == "III"
+    assert chord_to_roman(chord("F", 5, "maj"), 9, "Minor") == "IV"
+    assert chord_to_roman(chord("G", 7, "maj"), 9, "Minor") == "V"
+    assert chord_to_roman(chord("Bdim", 11, "dim"), 9, "Minor") == "vii°"
+    assert chord_to_roman(chord("Am7", 9, "m7"), 9, "Minor") == "vi7"
+    assert chord_to_roman(chord("Dm7", 2, "m7"), 9, "Minor") == "ii7"
+    assert chord_to_roman(chord("C/G", 0, "maj", bass_pc=7), 9, "Minor") == "I/G"
+    # 调外根音按字母对应音级加升降号：G#dim（=C 大调的升五度）-> #v°
+    assert chord_to_roman(chord("G#dim", 8, "dim"), 9, "Minor") == "#v°"
+
+
+def test_minor_as_tonic():
+    """--roman-tonic-minor：小调按主音小调记，Am -> i。"""
+    assert chord_to_roman(chord("Am", 9, "min"), 9, "Minor", minor_as_tonic=True) == "i"
+    assert chord_to_roman(chord("C", 0, "maj"), 9, "Minor", minor_as_tonic=True) == "III"
+    assert chord_to_roman(chord("Dm", 2, "min"), 9, "Minor", minor_as_tonic=True) == "iv"
+    assert chord_to_roman(chord("Em", 4, "min"), 9, "Minor", minor_as_tonic=True) == "v"
+    assert chord_to_roman(chord("G", 7, "maj"), 9, "Minor", minor_as_tonic=True) == "VII"
+    assert chord_to_roman(chord("Bdim", 11, "dim"), 9, "Minor", minor_as_tonic=True) == "ii°"
+    assert chord_to_roman(chord("G#dim", 8, "dim"), 9, "Minor", minor_as_tonic=True) == "#vii°"
 
 
 def test_suffix_transforms():

@@ -8,6 +8,10 @@
 
 记法约定（与常见罗马数字分析一致，兼顾和弦名可读性）：
 
+- 小调**默认按关系大调记度数**：A 小调视作 C 大调，Am -> ``vi``、
+  Dm -> ``ii``、Em -> ``iii``（流行和弦表常用的度数记法，便于直接对照
+  I-V-vi-IV 这类进行）；需要主音小调记法（Am -> ``i``）时传
+  ``minor_as_tonic=True``，对应 ``--roman-tonic-minor``。
 - 度数按当前调性的自然音阶拼写。根音音级正好落在调内音级时直接取该级
   （拼写为 Gb 的根音在 B 大调里与 F# 同音 -> ``V``，功能优先于字母拼写）；
   调外根音按根音字母对应的音级加升降号（C 在 B 大调 -> ``bII``，
@@ -18,8 +22,6 @@
 - 品质后缀保留（``V7``、``Imaj7``、``IV6/9``），只做符号替换：
   ``dim -> °``、``dim7 -> °7``、``m7b5 -> ø7``、``aug -> +``。
 - 斜杠低音保留音名写法（``Isus2/F#``），不强行转成转位标记。
-- 小调用自然小调音阶，因此升号导音和弦写成 ``#vii``
-  （G#dim 在 A 小调 -> ``#vii°``）。
 """
 
 from __future__ import annotations
@@ -130,6 +132,7 @@ def chord_to_roman(
     chord: dict,
     key_root: int,
     key_mode: str = "Major",
+    minor_as_tonic: bool = False,
 ) -> str:
     """
     把和弦识别结果转换成罗马数字标记。
@@ -139,9 +142,16 @@ def chord_to_roman(
 
     示例（B 大调）：Bsus2 -> ``Isus2``；C#m7 -> ``ii7``；
     B/F# -> ``I/F#``；C -> ``bII``。
+
+    小调默认按关系大调记（A 小调 Am -> ``vi``）；``minor_as_tonic=True``
+    时按主音小调记（Am -> ``i``、G#dim -> ``#vii°``）。
     """
     if key_root is None:
         raise ValueError("罗马数字需要调性根音（key_root）")
+    if key_mode == "Minor" and not minor_as_tonic:
+        # 关系大调与小调共享调号，拼写一致：A 小调 -> C 大调
+        key_root = (key_root + 3) % 12
+        key_mode = "Major"
     root = chord["root"] % 12
     quality = chord["quality"]
     scale_pcs = [(key_root + step) % 12 for step in _STEPS[key_mode]]

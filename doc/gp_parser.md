@@ -126,7 +126,8 @@ uv run gp-chords "song.gp" --track "Lead Guitar" --no-write --debug
 uv run gp-chords "song.gp" --track "Lead Guitar" --overwrite --write
 
 # 写回时默认在每拍和弦旁同时写罗马数字自由注解（如 B 大调下 Bsus2 -> Isus2，
-# 与 GP 的"自由文本"注解同机制，--no-roman 可关闭）；调性按各小节调号计算
+# 与 GP 的"自由文本"注解同机制，--no-roman 可关闭）；调性按各小节调号计算，
+# 小调按关系大调记（A 小调 Am -> vi，--roman-tonic-minor 切回主音小调）
 uv run gp-chords "song.gp" --track "Rhythm Guitar"
 
 # 指定调性 / 理论风格（不做强力/斜杠收敛）
@@ -180,8 +181,11 @@ uv run gp-key "song.gp" --no-write
    与《春日影.gp》里的手工注解 Isus2 同款）。记号按该窗口所在小节的调号
    计算：大三/挂留/强力和弦大写（I、Isus2、V5），小三/减/半减小写且省略
    后缀开头的 m（ii7、vii°、iiø7），调外根音加升降号（B 大调里 C -> bII），
-   斜杠低音保留音名（Isus2/F#）。`--no-roman` 关闭；已存在的自由文本
-   默认保留用户原文，只有 `--overwrite` 才替换。
+   斜杠低音保留音名（Isus2/F#）。小调默认按**关系大调**记度数
+   （A 小调 Am -> vi、Dm -> ii、Em -> iii，便于直接对照 I-V-vi-IV 进行），
+   `--roman-tonic-minor` 可切回主音小调记法（Am -> i）。
+   `--no-roman` 关闭；已存在的自由文本默认保留用户原文，只有 `--overwrite`
+   才替换。
 4. **避开 beat 复用陷阱**：GPIF 里同一个 beat 对象会被几十上百个位置复用
    （例如同一 riff 的 G4 拍），而带和弦的 beat 从不复用。如果目标拍被共享，
    脚本会**深拷贝一个新 beat**、分配新 id、并把该声部该位置的引用替换过去，

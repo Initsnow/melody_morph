@@ -1347,6 +1347,7 @@ def write_chords_to_gp(
     key_root: Optional[int],
     overwrite: bool = False,
     roman: bool = True,
+    roman_minor_as_tonic: bool = False,
 ) -> dict:
     """
     把自动识别的和弦写回一个新的 .gp 文件（原文件不被修改）。
@@ -1357,7 +1358,9 @@ def write_chords_to_gp(
     - 已有手工标注的小节默认跳过（--overwrite 时强制覆盖）。
     - ``roman=True`` 时在同一拍写 <FreeText> 罗马数字注解（如 B 大调下
       Bsus2 -> Isus2），调性取该窗口所在小节的调号；已存在自由文本的拍
-      默认保留用户原文，只有 --overwrite 才替换。
+      默认保留用户原文，只有 --overwrite 才替换。小调默认按关系大调记
+      （A 小调 Am -> vi），``roman_minor_as_tonic=True`` 时按主音小调记
+      （Am -> i）。
     """
     root, _ = read_gpif(input_path)
 
@@ -1493,7 +1496,8 @@ def write_chords_to_gp(
                 key_r = key_root
             if key_r is not None:
                 text = chord_to_roman(
-                    r["chord"], key_r, r.get("key_mode", "Major")
+                    r["chord"], key_r, r.get("key_mode", "Major"),
+                    minor_as_tonic=roman_minor_as_tonic,
                 )
                 if overwrite or beat_el.find("FreeText") is None:
                     _set_beat_freetext(beat_el, text)
@@ -1696,6 +1700,7 @@ def _write_back(
             key_root,
             overwrite=args.overwrite,
             roman=not args.no_roman,
+            roman_minor_as_tonic=args.roman_tonic_minor,
         )
         current_input = output_path
         print(
@@ -1909,6 +1914,10 @@ def main() -> None:
         "--no-roman", action="store_true",
         help="不写罗马数字自由注解（默认在每拍和弦旁写 <FreeText>，"
         "如 B 大调下 Bsus2 -> Isus2）",
+    )
+    parser.add_argument(
+        "--roman-tonic-minor", action="store_true",
+        help="小调罗马数字按主音小调记（Am -> i；默认按关系大调：Am -> vi）",
     )
     parser.add_argument("--no-compare", action="store_true", help="不做手工标注对照")
     parser.add_argument("--demo", action="store_true", help="运行算法演示")

@@ -415,6 +415,9 @@ b2 低音经过音密集），全轨 172 个 auto 窗口里暴露出三类系统
    位置与 GP8 原生文件一致（Chord 前），CDATA 由 `restore_cdata`
    统一补成 `<FreeText><![CDATA[...]]></FreeText>`。已存在的自由文本
    默认保留，`--overwrite` 才替换；`--no-roman` 整体关闭。
+   小调默认按**关系大调**记度数（A 小调 Am -> vi、Dm -> ii、Em -> iii，
+   流行和弦表常用，便于直接对照 I-V-vi-IV），`--roman-tonic-minor`
+   切回主音小调（Am -> i、G#dim -> #vii°）。
 3. **解析器**：`GPBeat.free_text` 读出拍上的自由文本，写回后自检
    与 `gp-info` 都能看到罗马数字。
 4. **顺带修一个拼写 bug**：`_FLAT_KEYS` 里含 11 导致 B 大调（5 个升号）
