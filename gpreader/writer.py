@@ -69,6 +69,13 @@ def restore_cdata(xml_text: str, pairs: list[tuple[str, str, str, str]]) -> str:
         r"<Chord><![CDATA[\1]]></Chord>",
         xml_text,
     )
+    # 拍上的自由文本注解（罗马数字等）：新增的 <FreeText> 也必须是 CDATA，
+    # 否则 GP8 静默丢弃；原文件已有的 CDATA 形式不会被这里二次包裹
+    xml_text = re.sub(
+        r"<FreeText>([^<]*?)</FreeText>",
+        r"<FreeText><![CDATA[\1]]></FreeText>",
+        xml_text,
+    )
     return xml_text
 
 

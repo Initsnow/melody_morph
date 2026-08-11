@@ -22,6 +22,9 @@
 5. ``--write`` 可以把识别结果写回一个新的 ``.gp`` 文件：向目标轨道的
    和弦库（DiagramCollection）添加和弦项，并在对应拍上写 ``<Chord>`` 引用。
    已有手工标注的小节默认跳过，不会被覆盖。
+6. 写回时默认在每个标注拍上同时写罗马数字自由注解（``<FreeText>``，
+   如 B 大调下 Bsus2 -> Isus2），调性按各窗口所在小节的调号计算；
+   ``--no-roman`` 可关闭，已存在的自由文本默认保留用户原文。
 
 用法::
 
@@ -76,6 +79,7 @@ from gpreader import (
     select_tracks,
 )
 from gpreader.writer import read_gpif, write_gpif
+from gpchords.roman import chord_to_roman
 
 # ---------------------------------------------------------------------------
 # 音乐理论基础
@@ -157,7 +161,7 @@ CHORD_TEMPLATES: dict[str, tuple[tuple[int, ...], str]] = {
 
 _SHARP_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 _FLAT_NAMES = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"]
-_FLAT_KEYS = {5, 10, 3, 8, 1, 6, 11}  # F Bb Eb Ab Db Gb Cb 用降号
+_FLAT_KEYS = {5, 10, 3, 8, 1, 6}  # F Bb Eb Ab Db Gb 用降号；B 大调（11）按标准用升号
 
 # Krumhansl-Kessler 键感轮廓
 KRUMHANSL_MAJOR = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
@@ -455,6 +459,7 @@ def detect_chord(
         "name": name,
         "root": root,
         "quality": quality,
+        "suffix": suffix,
         "bass_pc": bass_pc,
         "score": round(score, 2),
         "weights": {
@@ -1238,6 +1243,25 @@ def _set_beat_chord(beat_el: ET.Element, index: int) -> None:
     chord_el.text = str(index)
 
 
+def _set_beat_freetext(beat_el: ET.Element, text: str) -> None:
+    """给 <Beat> 写入/替换 <FreeText>（GP 的自由文本注解，显示在谱表上方）。
+
+    位置与 GP8 原生文件一致：<FreeText> 在 <Chord> 之前（示例见
+    《春日影.gp》的 ``<FreeText><![CDATA[Isus2]]></FreeText><Chord>``）。
+    """
+    ft_el = beat_el.find("FreeText")
+    if ft_el is None:
+        ft_el = ET.Element("FreeText")
+        for ref in ("Chord", "Notes", "Properties"):
+            anchor = beat_el.find(ref)
+            if anchor is not None:
+                beat_el.insert(list(beat_el).index(anchor), ft_el)
+                break
+        else:
+            beat_el.append(ft_el)
+    ft_el.text = text
+
+
 def _find_anchor_beat(
     measure: Optional[GPMeasure], result: dict
 ) -> Optional[GPBeat]:
@@ -1322,6 +1346,7 @@ def write_chords_to_gp(
     results: list[dict],
     key_root: Optional[int],
     overwrite: bool = False,
+    roman: bool = True,
 ) -> dict:
     """
     把自动识别的和弦写回一个新的 .gp 文件（原文件不被修改）。
@@ -1330,6 +1355,9 @@ def write_chords_to_gp(
     - 同名和弦已存在于轨道和弦库时直接复用，否则新增 Item（含和弦构成与指板图）。
     - 每个分析窗口挂到该窗口的第一个有音符的拍上。
     - 已有手工标注的小节默认跳过（--overwrite 时强制覆盖）。
+    - ``roman=True`` 时在同一拍写 <FreeText> 罗马数字注解（如 B 大调下
+      Bsus2 -> Isus2），调性取该窗口所在小节的调号；已存在自由文本的拍
+      默认保留用户原文，只有 --overwrite 才替换。
     """
     root, _ = read_gpif(input_path)
 
@@ -1459,12 +1487,23 @@ def write_chords_to_gp(
             cloned += 1
 
         _set_beat_chord(beat_el, name_to_index[r["chord"]["name"]])
+        if roman:
+            key_r = r.get("key_root")
+            if key_r is None:
+                key_r = key_root
+            if key_r is not None:
+                text = chord_to_roman(
+                    r["chord"], key_r, r.get("key_mode", "Major")
+                )
+                if overwrite or beat_el.find("FreeText") is None:
+                    _set_beat_freetext(beat_el, text)
         rewritten_beat_ids.add(beat_el.get("id"))
         written += 1
 
     if overwrite and beats_container is not None:
         # 清库重建后，本轨未被重写的旧和弦引用会指向不存在的库项，
         # 一并移除（GP8 从不复用带和弦的 beat，不会误伤其他轨道）。
+        # 随旧和弦一起移除的自由文本是同一套注解的一部分，也一并清理。
         track_beat_ids = {b.id for m in track.measures for b in m.beats}
         for beat_el in beats_container.findall("Beat"):
             if beat_el.get("id") not in track_beat_ids:
@@ -1474,6 +1513,9 @@ def write_chords_to_gp(
             chord_el = beat_el.find("Chord")
             if chord_el is not None:
                 beat_el.remove(chord_el)
+                ft_el = beat_el.find("FreeText")
+                if ft_el is not None:
+                    beat_el.remove(ft_el)
 
     # 写新 zip：逐项保留原文件的压缩方式与时间戳，GP8 对 zip 容器结构敏感
     write_gpif(input_path, output_path, root)
@@ -1482,8 +1524,12 @@ def write_chords_to_gp(
     verify_song = parse_gp(output_path)
     verify_track = next((t for t in verify_song.tracks if t.id == track.id), None)
     annotated_beats = 0
+    free_text_beats = 0
     if verify_track is not None:
         annotated_beats = sum(1 for m in verify_track.measures for b in m.beats if b.chord)
+        free_text_beats = sum(
+            1 for m in verify_track.measures for b in m.beats if b.free_text
+        )
 
     return {
         "written": written,
@@ -1494,6 +1540,7 @@ def write_chords_to_gp(
         "new_chords": len(new_names),
         "total_chords_in_library": len(verify_track.chords) if verify_track else len(track.chords),
         "annotated_beats": annotated_beats,
+        "free_text_beats": free_text_beats,
     }
 
 
@@ -1572,6 +1619,8 @@ def _analyze_measures(
                     "window": seg.window,
                     "start_quarters": seg.start_quarters,
                     "key": f"{pc_name(seg_key[0], seg_key[0])}{'m' if seg_key[1] == 'Minor' else ''}",
+                    "key_root": seg_key[0],
+                    "key_mode": seg_key[1],
                     "anchor_beat_id": seg.anchor_beat_id,
                     "anchor_voice_id": seg.anchor_voice_id,
                     "anchor_pos": seg.anchor_pos,
@@ -1646,6 +1695,7 @@ def _write_back(
             target_results,
             key_root,
             overwrite=args.overwrite,
+            roman=not args.no_roman,
         )
         current_input = output_path
         print(
@@ -1655,7 +1705,9 @@ def _write_back(
             f"  共享拍克隆: {stats.get('cloned', 0)} 个 | "
             f"跳过的手工标注小节: {stats['skipped_manual']} | "
             f"跳过已有和弦的拍: {stats['skipped_existing']}\n"
-            f"  验证通过：输出文件中带和弦标注的拍: {stats['annotated_beats']}"
+            f"  验证通过：带和弦标注的拍 {stats['annotated_beats']} 个 | "
+            f"带罗马数字自由注解的拍 {stats.get('free_text_beats', 0)} 个"
+            f"（罗马数字{'关' if args.no_roman else '开'}）"
         )
 
 
@@ -1852,6 +1904,11 @@ def main() -> None:
     parser.add_argument(
         "--overwrite", action="store_true",
         help="覆盖已有手工标注的和弦（默认跳过已标注的小节）",
+    )
+    parser.add_argument(
+        "--no-roman", action="store_true",
+        help="不写罗马数字自由注解（默认在每拍和弦旁写 <FreeText>，"
+        "如 B 大调下 Bsus2 -> Isus2）",
     )
     parser.add_argument("--no-compare", action="store_true", help="不做手工标注对照")
     parser.add_argument("--demo", action="store_true", help="运行算法演示")

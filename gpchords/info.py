@@ -53,6 +53,8 @@ def print_track(track: GPTrack, chords_only: bool) -> None:
             parts = []
             if beat.chord is not None:
                 parts.append(f"({beat.chord.name})")
+            if beat.free_text is not None:
+                parts.append(f"[{beat.free_text}]")
             parts.extend(
                 "X" if n.muted else (n.pitch_name or str(n.midi))
                 for n in beat.notes

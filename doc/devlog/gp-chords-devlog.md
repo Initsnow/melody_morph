@@ -393,3 +393,35 @@ b2 低音经过音密集），全轨 172 个 auto 窗口里暴露出三类系统
 属于同一修复的自然延伸，未发现回退）。`uv run pytest tests`
 121 passed（新增 4 个回归用例）。新生成文件：
 `ルサンチマン-きっとそう-04-07-2026_key_chords_v2.gp`。
+
+---
+
+## 罗马数字自由注解（参照《春日影.gp》的 Isus2）
+
+用户希望 gp-chords 在写回和弦时，顺带用 GP 的"自由文本"注解写罗马数字，
+参照《春日影.gp》里 Beat 上的手工标注：`<FreeText><![CDATA[Isus2]]></FreeText>`
+紧跟在 `<Chord>` 前——B 大调下 Bsus2 的罗马数字就是 Isus2。
+
+实现分四块：
+
+1. **`gpchords/roman.py`**：`chord_to_roman(chord, key_root, key_mode)` 把
+   识别结果转罗马数字。度数优先按音级落位（B 大调里拼写为 Gb 的根音
+   与 F# 同音 -> V，功能优先于字母拼写），调外根音按字母对应音级加
+   升降号（B 大调里 C -> bII）；大小写按品质（I/IV/Isus2/V5 大写，
+   ii7/vii°/iiø7 小写），小写度数已隐含小调性，后缀省略开头的 m
+   （C#m7 -> ii7）；斜杠低音保留音名（Isus2/F#）。
+2. **写回**：`write_chords_to_gp` 默认在挂和弦的拍上同时写
+   `<FreeText>`，调性取该窗口所在小节的调号（支持中途转调）；
+   位置与 GP8 原生文件一致（Chord 前），CDATA 由 `restore_cdata`
+   统一补成 `<FreeText><![CDATA[...]]></FreeText>`。已存在的自由文本
+   默认保留，`--overwrite` 才替换；`--no-roman` 整体关闭。
+3. **解析器**：`GPBeat.free_text` 读出拍上的自由文本，写回后自检
+   与 `gp-info` 都能看到罗马数字。
+4. **顺带修一个拼写 bug**：`_FLAT_KEYS` 里含 11 导致 B 大调（5 个升号）
+   被按 Cb 拼写——C#m 识别成 Dbm、F# 低音写成 Gb。B 大调按规范用升号，
+   从表里去掉 11；对《春日影.gp》实测 C#m(no5)/F#/G#m 等全部恢复
+   升号拼写，罗马数字随之正确（Isus2/F# 而不是 Isus2/Gb）。
+
+实测《春日影.gp》Rhythm Guitar 轨 `--overwrite`：143 处和弦全部带罗马
+数字自由注解，Bsus2 -> Isus2 与参照完全一致；`uv run pytest tests`
+135 passed（新增 14 个罗马数字用例，含真实文件写回验证）。

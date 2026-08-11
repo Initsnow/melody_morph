@@ -119,6 +119,7 @@ class GPBeat:
     duration_quarters: float = 0.0
     is_rest: bool = False
     chord: Optional[GPChord] = None  # 该拍挂的和弦标注
+    free_text: Optional[str] = None  # 该拍的自由文本注解（如罗马数字）
     notes: list[GPNote] = field(default_factory=list)
     voice_id: str = ""  # 所属声部（GPIF 里 beat 对象可被多处引用，用于定位/克隆）
     position_in_voice: int = -1  # 在声部 Beats 序列中的位置
@@ -366,6 +367,10 @@ def _parse_gpif(root: ET.Element, version: str) -> GPSong:
                         idx = int(chord_ref.strip())
                         if 0 <= idx < len(track.chords):
                             beat.chord = track.chords[idx]
+
+                    free_text = (beat_el.findtext("FreeText") or "").strip()
+                    if free_text:
+                        beat.free_text = free_text
 
                     note_ids = (beat_el.findtext("Notes") or "").split()
                     beat.is_rest = not note_ids or all(nid == "-1" for nid in note_ids)

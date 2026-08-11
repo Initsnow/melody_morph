@@ -125,6 +125,10 @@ uv run gp-chords "song.gp" --track "Lead Guitar" --no-write --debug
 # 已有手工标注的小节默认保留；--overwrite 时也写入/替换
 uv run gp-chords "song.gp" --track "Lead Guitar" --overwrite --write
 
+# 写回时默认在每拍和弦旁同时写罗马数字自由注解（如 B 大调下 Bsus2 -> Isus2，
+# 与 GP 的"自由文本"注解同机制，--no-roman 可关闭）；调性按各小节调号计算
+uv run gp-chords "song.gp" --track "Rhythm Guitar"
+
 # 指定调性 / 理论风格（不做强力/斜杠收敛）
 uv run gp-chords "song.gp" --key "Am" --style theory
 
@@ -171,7 +175,14 @@ uv run gp-key "song.gp" --no-write
    指板图由贪心算法从低音弦往高音弦生成，只为显示；和弦符号以名称为准。
 2. **挂拍**：在目标拍的 `<Beat>` 里写 `<Chord>CDATA[i]</Chord>`，
    `i` 是和弦库索引。
-3. **避开 beat 复用陷阱**：GPIF 里同一个 beat 对象会被几十上百个位置复用
+3. **罗马数字自由注解**：默认在同一个 `<Beat>` 里再写一个
+   `<FreeText>CDATA[Isus2]</FreeText>`（GP 的"自由文本"注解，显示在谱表上方，
+   与《春日影.gp》里的手工注解 Isus2 同款）。记号按该窗口所在小节的调号
+   计算：大三/挂留/强力和弦大写（I、Isus2、V5），小三/减/半减小写且省略
+   后缀开头的 m（ii7、vii°、iiø7），调外根音加升降号（B 大调里 C -> bII），
+   斜杠低音保留音名（Isus2/F#）。`--no-roman` 关闭；已存在的自由文本
+   默认保留用户原文，只有 `--overwrite` 才替换。
+4. **避开 beat 复用陷阱**：GPIF 里同一个 beat 对象会被几十上百个位置复用
    （例如同一 riff 的 G4 拍），而带和弦的 beat 从不复用。如果目标拍被共享，
    脚本会**深拷贝一个新 beat**、分配新 id、并把该声部该位置的引用替换过去，
    保证和弦精确落在目标小节，不会泄漏到 riff 的其他位置。
@@ -215,4 +226,7 @@ uv run gp-key "song.gp" --no-write
   `<Chord><![CDATA[i]]></Chord>` 这种形式；写成普通文本 `<Chord>i</Chord>`
   会被静默忽略（整个文件的和弦符号都不显示）。写回时按原文件的
   (标签, 文本) 对恢复 CDATA，新增的 `<Chord>` 数字引用也统一写成 CDATA。
+- **自由文本注解同样必须写成 CDATA**：新增的 `<FreeText>` 若写成普通文本，
+  GP8 会静默丢弃（参照文件里 Isus2 就是 CDATA 形式），写回时统一补成
+  `<FreeText><![CDATA[...]]></FreeText>`，并按 GP8 顺序放在 `<Chord>` 前。
 - 如果还有 GP3-5 旧格式的谱子，接 PyGuitarPro 做统一入口即可。

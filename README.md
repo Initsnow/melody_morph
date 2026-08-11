@@ -55,6 +55,10 @@ uv run gp-key "song.gp" --key Am
 # 指定轨道；默认按和弦变化自动切窗（--window auto），--no-write 不写回
 uv run gp-chords "song.gp" --track "Lead Guitar" --no-write --debug
 
+# 写回时默认在每拍和弦旁加罗马数字自由注解（如 B 大调下 Bsus2 -> Isus2，
+# 与 GP 的"自由文本"注解同机制；--no-roman 可关闭）；调性按各小节调号计算
+uv run gp-chords "song.gp" --track "Rhythm Guitar" --overwrite
+
 # 多轨道：每轨单独分析、单独标注（可逗号分隔或重复 --track，all=全部非鼓轨道）
 uv run gp-chords "song.gp" --track "Lead Guitar,Rhythm Guitar"
 uv run gp-chords "song.gp" --track all --no-write
