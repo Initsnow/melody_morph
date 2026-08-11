@@ -14,7 +14,9 @@
    与轮廓的相关性，取最高者。
 3. 把 (根音, 调式) 映射成 GPIF 的 `<Key>`：升号数为正、降号数为负；
    等音写法取调号较少者（如 Db 而非 C#、G#m 而非 Abm），平局取升号。
-   每个 MasterBar 写入/替换 `<Key>`，写回后重新解析自检。
+   每个 MasterBar 写入/替换 `<Key>`，同时写 `<TransposeAs>`（降号调
+   `Flats`、升号调 `Sharps`），并把该小节音符的 ConcertPitch/TransposedPitch
+   拼写重排到调号惯例（如 F 大调的 A# 改拼为 Bb），写回后重新解析自检。
 
 ## 行为
 

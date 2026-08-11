@@ -102,20 +102,89 @@ def _key_element(mb_el: ET.Element) -> ET.Element:
 
 
 def set_key_signature(mb_el: ET.Element, root_pc: int, mode: str) -> bool:
-    """写入/替换 MasterBar 调号，返回是否发生了实际变化。"""
+    """写入/替换 MasterBar 调号，返回是否发生了实际变化。
+
+    除 AccidentalCount/Mode 外，同时写 TransposeAs：降号调用 Flats、
+    升号调用 Sharps——GP8 自己设置调号时就是这么写的。只改 AccidentalCount
+    而保留旧 TransposeAs（通常是 Sharps）会让降号调的还原音符仍按升号显示，
+    例如 F 大调的 Bb 渲染成 A#。
+    """
     count, mode_name = key_signature(root_pc, mode)
     key_el = _key_element(mb_el)
     count_el = key_el.find("AccidentalCount")
     mode_el = key_el.find("Mode")
+    transpose_el = key_el.find("TransposeAs")
     if count_el is None:
         count_el = ET.SubElement(key_el, "AccidentalCount")
     if mode_el is None:
         mode_el = ET.SubElement(key_el, "Mode")
+    if transpose_el is None:
+        transpose_el = ET.Element("TransposeAs")
+        key_el.insert(list(key_el).index(mode_el) + 1, transpose_el)
     new = (str(count), mode_name)
     old = ((count_el.text or "").strip(), (mode_el.text or "").strip())
     count_el.text = new[0]
     mode_el.text = new[1]
-    return old != new
+    transpose = "Flats" if count < 0 else "Sharps"
+    transpose_changed = (transpose_el.text or "").strip() != transpose
+    transpose_el.text = transpose
+    return old != new or transpose_changed
+
+
+# 等音拼写重排：升降号惯例互转。只处理单个升降号（x/bb 不转），
+# 也不动自然音，保证 MIDI 音高、品位完全不变。
+_SHARP_TO_FLAT = {"C#": "Db", "D#": "Eb", "F#": "Gb", "G#": "Ab", "A#": "Bb"}
+_FLAT_TO_SHARP = {v: k for k, v in _SHARP_TO_FLAT.items()}
+
+
+def _respell_note(note_el: ET.Element, accidental_count: int) -> int:
+    """把音符的 ConcertPitch/TransposedPitch 拼写重排到调号惯例，返回改动数。"""
+    mapping = _SHARP_TO_FLAT if accidental_count < 0 else _FLAT_TO_SHARP
+    props = note_el.find("Properties")
+    if props is None:
+        return 0
+    changed = 0
+    for prop in props:
+        if prop.get("name") not in ("ConcertPitch", "TransposedPitch"):
+            continue
+        pitch = prop.find("Pitch")
+        if pitch is None:
+            continue
+        step_el = pitch.find("Step")
+        acc_el = pitch.find("Accidental")
+        if step_el is None or acc_el is None:
+            continue
+        key = (step_el.text or "").strip() + (acc_el.text or "").strip()
+        repl = mapping.get(key)
+        if repl is None:
+            continue
+        step_el.text = repl[0]
+        acc_el.text = repl[1:]
+        changed += 1
+    return changed
+
+
+def _bar_note_ids(root: ET.Element) -> dict[str, list[str]]:
+    """小节 id -> 该小节所有音符 id（按 GPIF 引用展开）。"""
+    voices = {v.get("id"): v for v in root.findall("Voices/Voice")}
+    beats = {b.get("id"): b for b in root.findall("Beats/Beat")}
+    out: dict[str, list[str]] = {}
+    for bar in root.findall("Bars/Bar"):
+        ids: list[str] = []
+        for vid in (bar.findtext("Voices") or "").split():
+            voice = voices.get(vid)
+            if voice is None:
+                continue
+            for bid in (voice.findtext("Beats") or "").split():
+                beat = beats.get(bid)
+                if beat is None:
+                    continue
+                ids.extend(
+                    nid for nid in (beat.findtext("Notes") or "").split()
+                    if nid != "-1"
+                )
+        out[bar.get("id")] = ids
+    return out
 
 
 def write_keys_to_gp(
@@ -134,7 +203,10 @@ def write_keys_to_gp(
     """
     root, _ = read_gpif(input_path)
     master_bars = root.findall("MasterBars/MasterBar")
+    notes = {n.get("id"): n for n in root.findall("Notes/Note")}
+    bar_note_ids = _bar_note_ids(root)
     written = skipped = 0
+    respell = 0
     touched: list[tuple[int, tuple[int, str]]] = []
     for i, mb in enumerate(master_bars, start=1):
         key = (keys_by_bar.get(i) if keys_by_bar else None) or default_key
@@ -148,6 +220,14 @@ def write_keys_to_gp(
             written += 1
         else:
             skipped += 1  # 值相同也算未写
+    for i, key in touched:
+        count, _ = key_signature(*key)
+        mb = master_bars[i - 1]
+        for bid in (mb.findtext("Bars") or "").split():
+            for nid in bar_note_ids.get(bid, []):
+                note_el = notes.get(nid)
+                if note_el is not None:
+                    respell += _respell_note(note_el, count)
     write_gpif(input_path, output_path, root)
 
     # 用解析器自检：每个目标的调号应被读回
@@ -164,6 +244,7 @@ def write_keys_to_gp(
     return {
         "written": written,
         "skipped": skipped,
+        "respell": respell,
         "bars": len(master_bars),
         "verified_match": match,
         "verified_total": len(touched),
@@ -250,6 +331,7 @@ def run_analysis(args) -> dict:
             f"  调号写入 {stats['written']} 个小节 | 未改动 {stats['skipped']} | "
             f"共 {stats['bars']} 个小节"
         )
+        print(f"  音符拼写重排 {stats['respell']} 个（与调号升降号惯例对齐）")
         print(
             f"  自检: 输出文件 {stats['verified_match']}/"
             f"{stats['verified_total']} 个写入小节调号一致"

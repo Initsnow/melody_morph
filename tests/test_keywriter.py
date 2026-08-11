@@ -102,14 +102,26 @@ def test_key_element_inserted_before_bars():
     assert [c.tag for c in mb] == ["Time", "Key", "Bars"]
     assert mb.find("Key/AccidentalCount").text == "0"
     assert mb.find("Key/Mode").text == "Major"
+    assert mb.find("Key/TransposeAs").text == "Sharps"
 
 
 def test_set_key_signature_reports_no_change_when_same():
     mb = ET.fromstring(
         "<MasterBar><Key><AccidentalCount>1</AccidentalCount><Mode>Major</Mode>"
-        "</Key></MasterBar>"
+        "<TransposeAs>Sharps</TransposeAs></Key></MasterBar>"
     )
     assert not set_key_signature(mb, 7, "Major")
+
+
+def test_set_key_signature_transpose_as_matches_key():
+    flat = ET.fromstring("<MasterBar><Key></Key></MasterBar>")
+    assert set_key_signature(flat, 5, "Major")  # F 大调：降号调
+    assert flat.find("Key/TransposeAs").text == "Flats"
+    # 只改 TransposeAs 也算实际变化：重跑可修复旧文件里的 Sharps 残留
+    assert set_key_signature(flat, 5, "Major") is False
+    sharp = ET.fromstring("<MasterBar><Key></Key></MasterBar>")
+    assert set_key_signature(sharp, 7, "Major")  # G 大调：升号调
+    assert sharp.find("Key/TransposeAs").text == "Sharps"
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +187,23 @@ GPIF_TWO_BARS_FIRST_KEYED = GPIF_TWO_BARS.replace(
     1,
 )
 
+GPIF_NOTE_SPELLED = """<GPIF>
+<GPVersion>8.0</GPVersion>
+<Tracks><Track id="0"><Name>L</Name><Staves><Staff><Properties>
+<Property name="Tuning"><Pitches>40 45 50 55 59 64</Pitches></Property>
+</Properties></Staff></Staves></Track></Tracks>
+<MasterBars><MasterBar><Time>4/4</Time><Bars>0</Bars></MasterBar></MasterBars>
+<Bars><Bar id="0"><Voices>0</Voices></Bar></Bars>
+<Voices><Voice id="0"><Beats>0</Beats></Voice></Voices>
+<Beats><Beat id="0"><Notes>0</Notes><Rhythm><ref>0</ref></Rhythm></Beat></Beats>
+<Notes><Note id="0"><Properties>
+<Property name="ConcertPitch"><Pitch><Step>A</Step><Accidental>#</Accidental><Octave>4</Octave></Pitch></Property>
+<Property name="Midi"><Number>58</Number></Property>
+<Property name="TransposedPitch"><Pitch><Step>A</Step><Accidental>#</Accidental><Octave>5</Octave></Pitch></Property>
+</Properties></Note></Notes>
+<Rhythms><Rhythm id="0"><NoteValue>Quarter</NoteValue></Rhythm></Rhythms>
+</GPIF>"""
+
 
 def make_gp(tmp_path: Path, gpif_text: str = GPIF_TWO_BARS) -> Path:
     gp = tmp_path / "mini.gp"
@@ -209,6 +238,40 @@ def test_fill_only_keeps_existing(tmp_path):
     assert stats["skipped"] == 1  # 第一小节已有调号 G
     assert stats["verified_match"] == stats["verified_total"] == 1
     assert keys_of(out) == ["G", "C"]
+
+
+def _spelling(out: Path, prop: str) -> str:
+    with zipfile.ZipFile(out) as z:
+        root = ET.fromstring(z.read("Content/score.gpif"))
+    note = root.find("Notes/Note")
+    pitch = note.find(f'Properties/Property[@name="{prop}"]/Pitch')
+    return "".join(
+        (pitch.findtext(tag) or "")
+        for tag in ("Step", "Accidental", "Octave")
+    )
+
+
+def test_flat_key_respells_sharp_notes(tmp_path):
+    gp = make_gp(tmp_path, GPIF_NOTE_SPELLED)
+    out = tmp_path / "out.gp"
+    stats = write_keys_to_gp(gp, out, {}, default_key=(5, "Major"))  # F 大调
+    assert stats["respell"] == 2
+    assert _spelling(out, "ConcertPitch") == "Bb4"
+    assert _spelling(out, "TransposedPitch") == "Bb5"
+    assert keys_of(out) == ["F"]
+
+
+def test_sharp_key_respells_flat_notes(tmp_path):
+    gpif = GPIF_NOTE_SPELLED.replace(
+        "<Step>A</Step><Accidental>#</Accidental>",
+        "<Step>B</Step><Accidental>b</Accidental>",
+    )
+    gp = make_gp(tmp_path, gpif)
+    out = tmp_path / "out.gp"
+    stats = write_keys_to_gp(gp, out, {}, default_key=(7, "Major"))  # G 大调
+    assert stats["respell"] == 2
+    assert _spelling(out, "ConcertPitch") == "A#4"
+    assert keys_of(out) == ["G"]
 
 
 @pytest.mark.skipif(not SAMPLE_FILE.exists(), reason="样例文件不存在")
