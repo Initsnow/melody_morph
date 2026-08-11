@@ -16,7 +16,7 @@
 3. 在每个分析窗口内收集音级（按真实时值加权，延音延续不重复计权，
    低音音级放大），对 46 种和弦模板（大/小/属/挂留/强力和弦等）打分：
    命中音加分、非和弦音扣分、缺失和弦音扣分（七和弦缺 7 音额外扣分）；
-   m7/6 同音集时一律取 m7 读法；调性只用于拼写与极小破平，最终取最高分。
+    m7/6 同音集时一律取 m7 读法；调性只用于拼写，不参与打分与破平。
 4. 吉他风格下，没有三音时收敛成强力和弦（5），低音不是根音时写成
    斜杠和弦（如 ``C5/G``），与 Guitar Pro 里的常见记法一致。
 5. ``--write`` 可以把识别结果写回一个新的 ``.gp`` 文件：向目标轨道的
@@ -341,9 +341,9 @@ def detect_chord(
 
     打分：命中音加分 - 非和弦音扣分 - 缺失和弦音扣分（七和弦缺 7 音
     另有额外扣分）。
-    调性（主音/调内）不参与主分数，只作为同分时的极小破平；
     低音音级在计权时放大，且低音等于根音在同分时优先；
     m7 与 6 是同一组音的不同读法（Dm7 = F6），同分时一律取 m7 读法。
+    调性（主音/调内）不参与任何打分或破平，只决定结果的升/降号拼写。
 
     证据门槛：单音无法确定和弦，返回 None；双音只有纯五度
     （强力和弦）可以确定，其余双音（三度/七度/二度等）同样返回 None，
@@ -363,7 +363,6 @@ def detect_chord(
     if bass_pc in weights:
         weights[bass_pc] *= BASS_WEIGHT_MULTIPLIER
     total = sum(weights.values())
-    key_pcs = _diatonic_pcs(key_root, key_mode) if key_root is not None else None
     present_pcs = {pc for pc, v in raw.items() if v > 0}
     if len(present_pcs) <= 1:
         return None
@@ -407,10 +406,6 @@ def detect_chord(
                 - seventh_penalty
                 - COMPLEXITY_PENALTY * len(tpl)
             )
-            if key_pcs is not None and root in key_pcs:
-                key_rank = 2 if root == key_root else 1
-            else:
-                key_rank = 0
             family = 2 if quality in _M7_FAMILY else (
                 0 if quality in _SIXTH_FAMILY else 1
             )
@@ -418,7 +413,6 @@ def detect_chord(
                 (
                     score,
                     family,
-                    key_rank,
                     bass_pc == root,
                     raw.get(root, 0.0),
                     root,
@@ -428,22 +422,22 @@ def detect_chord(
                 )
             )
 
-    # 排序：分数 > m7/6 家族偏好 > 调内/主音破平 > 低音=根音 > 根音出现权重
-    # > 模板更简单 > 根音编号更小
-    # 调性只做极小破平：不参与主分数，仅在同分时先看调内/主音。
+    # 排序：分数 > m7/6 家族偏好 > 低音=根音 > 根音出现权重 > 模板更简单
+    # > 根音编号更小。调性不参与——同音集的挂留/转位读法
+    # （如 E-B-F# = Esus2/Bsus4/F#sus4）分数完全并列时，由实际在响的
+    # 低音定根音（B 大调 29 小节读 Esus2，而不是被主音先验拉走的 Bsus4/E）。
     candidates.sort(
         key=lambda c: (
             c[0],
             c[1],
             c[2],
             c[3],
-            c[4],
-            -len(CHORD_TEMPLATES[c[6]][0]),
-            -c[5],
+            -len(CHORD_TEMPLATES[c[5]][0]),
+            -c[4],
         ),
         reverse=True,
     )
-    score, _, _, _, _, root, quality, suffix, tset = candidates[0]
+    score, _, _, _, root, quality, suffix, tset = candidates[0]
 
     matched_pcs = {pc for pc in weights if pc in tset}
     if style == "guitar" and quality != "5" and matched_pcs <= {root, (root + 7) % 12}:

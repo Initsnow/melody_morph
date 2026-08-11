@@ -280,6 +280,19 @@ def test_tonic_bonus_removed_am7_in_a_major():
     assert result["name"] == "Am7"
 
 
+def test_same_pitchset_sus_follows_bass_not_tonic():
+    """E-B-F# 同音集（Esus2/Bsus4/F#sus4 分数并列）由低音定根音。
+
+    回归用例（《春日影.gp》29 小节）：B7（V7/IV）之后是 E-B-F#，
+    应读 Esus2（低音 E = 根音），而不是被"主音/调内先验"破平拉走的
+    Bsus4/E。调性不能参与打分或破平，只能决定拼写。
+    """
+    result = detect([52, 59, 66], key_root=11, key_mode="Major", style="guitar")
+    assert result is not None
+    assert result["name"] == "Esus2"
+    assert result["root"] == 4
+
+
 # ---------------------------------------------------------------------------
 # 第 2 步：真实时值 / 延音计权
 # ---------------------------------------------------------------------------
@@ -632,11 +645,13 @@ def test_13_requires_eleventh():
     assert result["name"] == "C9"
 
 
-def test_add11_no5_arpeggio_and_omitted_fifth():
-    # 主音琶音 F-C-E-C：C 当根音、F 在低音 -> Cadd11(no5)/F（而非 F5）
+def test_add11_no5_arpeggio_and_omitted_third():
+    # 琶音 F-C-E-C：F-C-E 同音集可读 Cadd11(no5)/F 或 Fmaj7(no3)。
+    # 调性不参与破平后，由低音定根音 -> Fmaj7(no3)（低音 F = 根音），
+    # 不再被"主音 C 优先"的旧先验拉成 Cadd11(no5)/F。
     r = detect([53, 60, 64, 60], key_root=0, key_mode="Major")
-    assert r is not None and r["name"] == "Cadd11(no5)/F"
-    # 写回时第五度标记 omitted=true（与 GP8 原生 no5 记法一致）
+    assert r is not None and r["name"] == "Fmaj7(no3)"
+    # 写回时第三度标记 omitted=true（与 GP8 原生 no3 记法一致）
     from gpchords.annotate import _build_chord_item
 
     item = _build_chord_item(0, r, [40, 45, 50, 55, 59, 64], 0)
@@ -644,8 +659,7 @@ def test_add11_no5_arpeggio_and_omitted_fifth():
         (d.get("interval"), d.get("alteration")): d.get("omitted")
         for d in item.findall("Chord/Degree")
     }
-    assert degs[("Fifth", "Perfect")] == "true"
-    assert degs[("Eleventh", "Perfect")] == "false"
+    assert degs[("Third", "Major")] == "true"
 
 
 def test_add11_no5_does_not_steal_larger_arpeggio():
