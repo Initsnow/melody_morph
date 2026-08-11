@@ -497,6 +497,60 @@ def test_auto_scale_run_stays_split_and_unlabeled():
     assert all(r is None for r in names(segs))
 
 
+def test_auto_arpeggio_with_internal_step_merges():
+    """分解和弦内部出现级进时仍合成一窗（《春日影》35 小节回归）。
+
+    D#-B-C#-F#-C#-B 琶音：B->C# 是小二度级进，但整组是 Badd9
+    （B-D#-F#-C#）的分解，不得切成 B(no5)/D# + Bsus2 两窗。
+    纯音阶跑动（全程级进）仍然保持切散。
+    """
+    midis = [51, 59, 61, 66, 61, 59]  # D#4 B4 C#5 F#5 C#5 B4（真实小节音高）
+    m = measure(
+        1,
+        [beat(float(i) * 0.5, [(midi, 0.5)]) for i, midi in enumerate(midis)],
+    )
+    segs = segment_auto(m)
+    assert len(segs) == 1
+    assert names(segs) == ["Badd9/D#"]
+
+
+def test_auto_two_power_chords_with_step_stay_split():
+    """E5 -> B5 是两个独立强力和弦，级进边界不得并成 Esus2。
+
+    边界区分：琶音内部级进要有后续拍接住；结尾拍（E-F# 二度）没有
+    后续，视为和弦变化而不是同一琶音。
+    """
+    m = measure(
+        1,
+        [
+            beat(0.0, [(52, 0.5)]),   # E4
+            beat(0.5, [(59, 0.5)]),   # B4
+            beat(1.0, [(64, 0.5)]),   # E5
+            beat(1.5, [(66, 1.5), (59, 1.5)]),  # F#5 + B4 = B5
+        ],
+    )
+    segs = segment_auto(m)
+    assert len(segs) == 2
+    assert names(segs) == ["E5", "B5"]
+
+
+def test_auto_passing_tone_not_glued_into_chord():
+    """结尾经过音（F#-F-E 的 F 自然音）不得并成 C#add11(no5)。"""
+    m = measure(
+        1,
+        [
+            beat(0.0, [(49, 0.5)]),   # C#4
+            beat(0.5, [(61, 0.5)]),   # C#5
+            beat(1.0, [(66, 0.5)]),   # F#5
+            beat(1.5, [(65, 1.0)]),   # F5（经过音）
+            beat(2.5, [(68, 0.5), (64, 0.5), (59, 0.5), (56, 0.5), (52, 0.5)]),
+        ],
+    )
+    segs = segment_auto(m)
+    assert len(segs) == 3
+    assert names(segs) == ["F#5/C#", None, "E"]
+
+
 def test_auto_keeps_real_chord_change_after_chord():
     # C 和弦之后接 G5 双音是真实和弦变化，不得误并入 Cadd9
     m = measure(

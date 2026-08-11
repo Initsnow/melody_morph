@@ -582,9 +582,15 @@ def _group_weight(beats: list[GPBeat]) -> float:
 
 
 def _is_stepwise(fps: set[int], last: set[int]) -> bool:
-    """新拍与上一拍是否级进（小二/大二度内）——级进视为经过音，不合并。"""
+    """新拍与上一拍是否级进（小二/大二度内）——级进视为经过音，不合并。
+
+    同音重复（距离 0）不算级进：{G#,B} 接 {G#} 是和弦延续（G#m 琶音），
+    不是音阶跑动。
+    """
     for a in fps:
         for b in last:
+            if a == b:
+                continue
             d = abs(a - b) % 12
             if min(d, 12 - d) <= 2:
                 return True
@@ -599,6 +605,21 @@ def _fits_some_template(pcs: set[int]) -> bool:
             if pcs <= tones:
                 return True
     return False
+
+
+def _arpeggio_continues(
+    beat: GPBeat, group_pcs: set[int], prev_fp: set[int]
+) -> bool:
+    """级进并入后，下一拍是否仍属于同一琶音（防止结尾经过音被并入）。"""
+    fp = set(_beat_fingerprint(beat))
+    if fp == group_pcs or fp <= group_pcs or group_pcs <= fp:
+        return True
+    return (
+        len(fp) <= 2
+        and (len(fp) == 1 or len(group_pcs) <= 2)
+        and not _is_stepwise(fp, prev_fp)
+        and _fits_some_template(group_pcs | fp)
+    )
 
 
 def _first_content_group(measure: GPMeasure) -> list[GPNote]:
@@ -679,7 +700,9 @@ def segment_auto(
 
     1. 逐拍合并指纹相同或互为子集的拍（同和弦重复/琶音尾）；
     2. 单音/双音碎片按"级进判定 + 模板兼容"合并——逐音琶音
-       （C-G-B-E）合成一窗，音阶跑动（C-D-E-F-G）因级进不合并；
+       （C-G-B-E）合成一窗；琶音内部的级进（如 B-D#-F#-C# 里的
+       B->C#）在组已由跳进成形时同样并入（整组读 Badd9）；纯音阶
+       跑动（C-D-E-F-G）因全程级进不合并；
     3. PC 集不再兼容时切分；
     4. 权重占比过小的独立组（经过音、尾音）并入相邻组，
        避免把 16 分音符经过音切成单独和弦；但 tie 进下一小节或与
@@ -693,8 +716,9 @@ def segment_auto(
 
     groups: list[list[GPBeat]] = []
     group_fps: list[set[int]] = []
+    group_skip: list[bool] = []  # 该组是否已通过跳进扩展过（琶音特征）
     last_fp: set[int] | None = None  # 当前组内上一拍的指纹（级进判定）
-    for beat in beats:
+    for idx, beat in enumerate(beats):
         fp = set(_beat_fingerprint(beat))
         if groups:
             gfp = group_fps[-1]
@@ -704,20 +728,37 @@ def segment_auto(
                 last_fp = fp
                 continue
             # 琶音碎片合并：新拍最多 2 音；双音碎片只并入尚未成形的组；
-            # 相对上一拍必须是跳进，且并集能落在某个模板和弦内。
+            # 并集能落在某个模板和弦内。级进（小二/大二度）默认视为
+            # 经过音不合并（音阶跑动 C-D-E-F-G 保持切散），但当前组
+            # 已由跳进成形（分解和弦特征）时，琶音内部的级进也允许并入
+            # （如 B-D#-F#-C# 琶音里的 B->C#，整组读 Badd9）；此时要求
+            # 下一拍仍能接住合并结果，避免把结尾经过音（如 F#-F-E 的 F）
+            # 或独立强力和弦（E5 -> B5）错误并进主窗。
+            step = last_fp is not None and _is_stepwise(fp, last_fp)
             if (
                 len(fp) <= 2
                 and (len(fp) == 1 or len(gfp) <= 2)
-                and last_fp is not None
-                and not _is_stepwise(fp, last_fp)
                 and _fits_some_template(gfp | fp)
+                and (not step or group_skip[-1])
             ):
+                if step:
+                    nxt = beats[idx + 1] if idx + 1 < len(beats) else None
+                    if nxt is None or not _arpeggio_continues(
+                        nxt, gfp | fp, fp
+                    ):
+                        groups.append([beat])
+                        group_fps.append(set(fp))
+                        group_skip.append(False)
+                        last_fp = fp
+                        continue
                 groups[-1].append(beat)
                 group_fps[-1] |= fp
+                group_skip[-1] = True
                 last_fp = fp
                 continue
         groups.append([beat])
         group_fps.append(set(fp))
+        group_skip.append(False)
         last_fp = fp
 
     # 吸收占比过小的组：并入权重更大的相邻组（并集做整体识别）
