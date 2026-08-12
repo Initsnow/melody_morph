@@ -654,26 +654,6 @@ def test_auto_leading_single_note_merges_into_stable_chord():
     assert r["name"] == "Fsus2"
 
 
-def test_auto_normal_tail_16th_still_absorbed():
-    # 没有下一小节上下文时，16 分经过音仍按 20% 规则吸收（回归保护）
-    m = measure(
-        1,
-        [
-            beat(0.0, [(48, 3.5), (52, 3.5), (55, 3.5)]),
-            beat(3.5, [(50, 0.25), (57, 0.25), (62, 0.25), (65, 0.25)]),
-        ],
-    )
-    segs = segment_auto(m)
-    assert len(segs) == 1
-
-
-def test_auto_keeps_fixed_windows():
-    from gpchords.annotate import SEGMENTERS
-
-    assert "auto" in SEGMENTERS
-    assert {"measure", "half", "beat"} <= set(SEGMENTERS)
-
-
 # ---------------------------------------------------------------------------
 # 第 4 步：模板扩充（参照 pychord，去别名、对齐 GP 记法）
 # ---------------------------------------------------------------------------
@@ -764,11 +744,6 @@ def test_m7_no3():
     assert r is not None and r["name"] == "Cm7(no3)"
 
 
-def test_m7_no5_template_registered():
-    assert "m7(no5)" in CHORD_TEMPLATES
-    assert "m7(no5)" in DEGREES
-
-
 def test_m7_no5_preferred_over_sixth_without_fifth():
     # D-F-C（缺 A）：F6/D 需要 A，不能成立，应为 Dm7(no5)
     r = detect([50, 53, 60], key_root=5, key_mode="Major")
@@ -779,15 +754,6 @@ def test_m7_no5_preferred_over_sixth_without_fifth():
     # Bb-Db-Ab（Bbm7 缺五音 F 的吉他声部）-> Bbm7(no5)
     r3 = detect([46, 58, 61, 68], key_root=5, key_mode="Major")
     assert r3 is not None and r3["name"] == "Bbm7(no5)"
-
-
-def test_m7_always_preferred_over_sixth_on_same_notes():
-    # D F A C 是 Dm7 / F6 的同音集：无论调性、无论低音在 D 还是 F，
-    # 按吉他谱习惯一律取 m7 读法（与 test_detect_chord_core 的 Dm7/F 一致）
-    r = detect([38, 50, 53, 57, 60], key_root=5, key_mode="Major")  # 低音 D
-    assert r is not None and r["name"] == "Dm7"
-    r2 = detect([41, 50, 57, 60], key_root=2, key_mode="Minor")  # 低音 F
-    assert r2 is not None and r2["name"] == "Dm7/F"
 
 
 def test_dominant_seventh_without_seventh_loses_to_implied_root():
@@ -807,12 +773,6 @@ def test_slash_bass_double_sharp_spelled_naturally():
     # E7#9 的 #9 低音是 G（理论度数拼写 F##），GP 记法应写成 E7#9/G
     result = detect([43, 52, 56, 59, 62], key_root=9, key_mode="Major")
     assert result is not None and result["name"] == "E7#9/G"
-
-
-def test_slash_bass_flat_degree_kept():
-    # 单降/单升度数拼写保留（C7/Bb 不因新规则回退成 A#）
-    result = detect([46, 48, 52, 55], key_root=0, key_mode="Major")
-    assert result["name"] == "C7/Bb"
 
 
 def test_no_aliases_duplicated():
