@@ -50,6 +50,7 @@ from gpchords.annotate import (
     segment_auto,
 )
 from gpchords.roman import chord_to_roman
+from gpchords.progression import find_loop_families
 
 # ---------------------------------------------------------------------------
 # 每小节特征
@@ -438,8 +439,8 @@ def feature_matrices(
 def novelty_curve(S: list[list[float]], L: int) -> list[float]:
     n = len(S)
     cur = [0.0] * n
-    for b in range(L, n - L):
-        left, right = range(b - L, b), range(b, b + L)
+    for b in range(L, n):
+        left, right = range(b - L, b), range(b, min(n, b + L))
         intra = c = 0.0
         for i in left:
             for j in left:
@@ -464,23 +465,28 @@ def novelty_curve(S: list[list[float]], L: int) -> list[float]:
 
 def repetition_onset_curve(
     S: list[list[float]], L: int
-) -> list[float]:
-    """块 [b, b+L) 与前面所有块的最大相似度——段落在复用旧材料也是起点。"""
+) -> tuple[list[float], list[int]]:
+    """块 [b, b+L) 与前面所有块的**逐位对齐**最大相似度及匹配起点（0 起）。
+
+    段落在复用旧材料也是起点；同时记录最佳匹配块的位置，供"复用起点对齐
+    已有边界"的定向判定（避免全曲处处重复造成的 rep 噪声峰）。
+    逐位对齐（S[b+i][e+i]）而不是跨位置两两平均：同一段重播时位置是一一
+    对应的，跨位置平均会把精确重复稀释成 0.5 附近。
+    """
     n = len(S)
     cur = [0.0] * n
+    arg = [-1] * n
     for b in range(L, n - L):
         best = 0.0
+        best_e = -1
         for e in range(0, b - L + 1):
-            s = 0.0
-            c = 0
-            for i in range(L):
-                for j in range(L):
-                    if i != j:
-                        s += S[b + i][e + j]
-                        c += 1
-            best = max(best, s / c if c else 0.0)
+            v = sum(S[b + i][e + i] for i in range(L)) / L
+            if v > best:
+                best = v
+                best_e = e
         cur[b] = best
-    return cur
+        arg[b] = best_e
+    return cur, arg
 
 
 def _norm(c: list[float]) -> list[float]:
@@ -506,11 +512,22 @@ def detect_boundaries(
     features: SongFeatures,
     L: int = 4,
     gap: int = 4,
-    kthr: float = 0.6,
-    rep_weight: float = 0.5,
+    kthr: float = 0.4,
+    rep_weight: float = 0.25,
+    split_period: int = 8,
 ) -> list[Boundary]:
-    """多特征 novelty 加权 + 和弦重复起点 + 硬信号 → 候选边界（含证据）。"""
+    """多特征 novelty 加权 + 定向重复起点 + 连续循环切分 + 硬信号 → 候选边界。
+
+    - 调号/拍号/速度变化是**软信号**：给组合曲线加固定增益，段内转调
+      （如 Bridge 内部转调）不会强制切开；编曲级长休止仍强制。
+    - 重复起点曲线独立取峰：新段落在复用前面某段的材料（Bridge 2 复用
+      Bridge 1 开头、副歌复用 Intro）时也是段落起点。
+    - 连续重复进行按循环遍边界切分（``split_period`` 及以上周期的循环，
+      如 8 小节 Verse ×2 → 第二遍起点是段落起点）。
+    """
     n = features.n
+    if n == 0:
+        return []
     matrices = feature_matrices(features)
     curves: dict[str, list[float]] = {}
     thr_map: dict[str, float] = {}
@@ -526,45 +543,175 @@ def detect_boundaries(
         w = FEATURE_WEIGHTS.get(name, 1.0)
         for i in range(n):
             combined[i] += w * c[i]
+    rep_arg: list[int] = []
+    rep_raw: list[float] = []
     if "chord" in matrices:
-        rep = _norm(repetition_onset_curve(matrices["chord"], L))
+        rep_raw, rep_arg = repetition_onset_curve(matrices["chord"], min(L, 4))
+        rep = _norm(rep_raw)
         if max(rep) > min(rep):
             for i in range(n):
                 combined[i] += rep_weight * rep[i]
             curves["_rep"] = rep
 
+    # 硬信号：长休止强制；调号/拍号/速度变化只作证据（软）——段内转调很
+    # 常见（如《无论如何》Bridge 内部 C 大调），改分数会抬高全局阈值、
+    # 误伤其他弱边界
+    forced_indices: set[int] = set()
+    for bar, reasons in features.hard_events.items():
+        idx = bar - 1
+        if not (0 <= idx < n):
+            continue
+        if "长休止" in reasons:
+            forced_indices.add(idx)
+
     m, sd = _mean_std(combined)
     threshold = m + kthr * sd
-    peaks: list[int] = []
-    b = gap
-    while b < n - gap:
-        if (
-            combined[b] >= threshold
-            and combined[b] >= combined[b - 1]
-            and combined[b] >= combined[b + 1]
-        ):
-            peaks.append(b)
-            b += gap
-        else:
-            b += 1
+    peaks = _peaks(combined, gap, threshold)
+
+    # 定向重复起点：逐位对齐相似度 ≥0.75 的局部峰 + 匹配到的旧块起点是
+    # 歌曲开头或已检出边界
+    # （《无论如何》Bridge 2 前 4 小节复用 Bridge 1、《春日影》副歌复用
+    # Intro 都是这种；全曲处处相似产生的普通 rep 峰被排除）
+    # 干净循环区域内部不再报"复用起点"（Intro 2 小节循环让 3/5/7 全变成
+    # 复用歌曲开头）；区域起点本身保留（副歌 45 复用 Intro 正是区域起点）。
+    # 只有重复遍逐位相似度 ≥0.85 的干净循环才参与抑制——模糊循环的区域
+    # 边界不可靠（如《无论如何》94-105 的 6 小节模糊循环会吞掉 Bridge 2
+    # 起点 105）。
+    loop_interior: set[int] = set()
+    if features.chords:
+        for f in find_loop_families(features.chords):
+            for start, end in f.occurrences:
+                if _region_quality(features.chords, start, end, f.period) >= 0.85:
+                    loop_interior.update(range(start + 1, end + 1))
+
+    if rep_raw and len(rep_arg) == n:
+        rep_peaks: set[int] = set()
+        for b in range(gap, n - 1):
+            if rep_raw[b] < 0.75:
+                continue
+            if b + 1 in loop_interior:
+                continue
+            if not (
+                rep_raw[b] >= rep_raw[b - 1] and rep_raw[b] >= rep_raw[b + 1]
+            ):
+                continue
+            e0 = rep_arg[b]
+            if e0 < 0:
+                continue
+            e_bar = e0 + 1
+            aligned = e_bar == 1 or any(
+                abs(e_bar - p) <= 1 for p in peaks
+            )
+            if not aligned:
+                continue
+            if not any(abs(b - p) <= 1 for p in peaks):
+                peaks.append(b)
+                rep_peaks.add(b)
+
+    # 连续重复循环：周期 ≥ split_period 的循环在每遍起点切分
+    if split_period and features.chords:
+        for bar in _loop_copy_boundaries(features.chords, split_period):
+            idx = bar - 1
+            if not any(abs(idx - p) <= 1 for p in peaks):
+                peaks.append(idx)
+
+    for idx in sorted(forced_indices):
+        if not any(abs(idx - p) <= 1 for p in peaks):
+            peaks.append(idx)
+    peaks = sorted(set(peaks))
+    # 重复起点独证的候选边界需要足够分数才保留（循环多的歌里"某块和前面
+    # 某块相似"遍地都是，低分 rep 峰大多是噪声；如《春日影》中段的
+    # 46/56/80/84/90/93 分数 1.3-2.6，而《无论如何》Bridge 2 的 103 有 3.1）
+    peaks = [
+        b
+        for b in peaks
+        if b not in rep_peaks or combined[b] >= 3.0
+    ]
 
     out: list[Boundary] = []
     for b in peaks:
         evidence = _evidence_at(curves, thr_map, combined, b, gap)
-        out.append(Boundary(bar=b + 1, score=round(combined[b], 3), evidence=evidence))
+        out.append(
+            Boundary(
+                bar=b + 1,
+                score=round(combined[b], 3),
+                evidence=evidence,
+                forced=b in forced_indices,
+            )
+        )
 
+    # 硬信号原因并入附近边界的证据（不再单独强制）
     for bar, reasons in sorted(features.hard_events.items()):
-        if any(abs(bar - x.bar) <= 1 for x in out):
+        if not out:
+            break
+        idx = min(range(len(out)), key=lambda i: abs(out[i].bar - bar))
+        if abs(out[idx].bar - bar) <= 1:
             for reason in reasons:
-                if reason not in out[
-                    min(range(len(out)), key=lambda i: abs(out[i].bar - bar))
-                ].evidence:
-                    out[
-                        min(range(len(out)), key=lambda i: abs(out[i].bar - bar))
-                    ].evidence.append(reason)
-            continue
-        out.append(Boundary(bar=bar, score=0.0, evidence=list(reasons), forced=True))
+                if reason not in out[idx].evidence:
+                    out[idx].evidence.append(reason)
     out.sort(key=lambda x: x.bar)
+    return out
+
+
+def _region_quality(
+    chords: list[Optional[tuple[str, str]]],
+    start: int,
+    end: int,
+    period: int,
+) -> float:
+    """循环区域的重复遍逐位度数一致率（0..1）。"""
+    copies = (end - start + 1) // period
+    if copies < 2:
+        return 1.0
+    sims = []
+    for k in range(copies - 1):
+        a = start - 1 + k * period
+        b = a + period
+        hits = sum(
+            1
+            for i in range(period)
+            if chords[a + i]
+            and chords[b + i]
+            and chords[a + i][0] == chords[b + i][0]
+        )
+        sims.append(hits / period)
+    return sum(sims) / len(sims)
+
+
+def _peaks(curve: list[float], gap: int, threshold: float) -> list[int]:
+    n = len(curve)
+    out: list[int] = []
+    b = gap
+    while b < n - 1:
+        # 每个 gap 窗口内取最强局部峰（允许尾部边界，如最后 4 小节的 Outro）
+        best = -1
+        for i in range(b, min(b + gap, n - 1)):
+            if curve[i] < threshold:
+                continue
+            if i > 0 and curve[i] < curve[i - 1]:
+                continue
+            if i + 1 < n and curve[i] < curve[i + 1]:
+                continue
+            if best < 0 or curve[i] > curve[best]:
+                best = i
+        if best >= 0:
+            out.append(best)
+        b += gap
+    return out
+
+
+def _loop_copy_boundaries(
+    chords: list[Optional[tuple[str, str]]], min_period: int
+) -> list[int]:
+    """连续重复循环的每遍起点（1 起）：8 小节 Verse ×2 -> 第二遍起点。"""
+    out: list[int] = []
+    for f in find_loop_families(chords):
+        if f.period < min_period:
+            continue
+        for start, end in f.occurrences:
+            copies = (end - start + 1) // f.period
+            for k in range(1, copies):
+                out.append(start + k * f.period)
     return out
 
 
@@ -984,8 +1131,13 @@ def main() -> None:
     parser.add_argument("--novelty-l", type=int, default=6, help="novelty 块长（小节）")
     parser.add_argument("--gap", type=int, default=4, help="候选边界最小间距（小节）")
     parser.add_argument(
-        "--threshold", type=float, default=0.6,
+        "--threshold", type=float, default=0.4,
         help="峰阈值 = 均值 + threshold×标准差",
+    )
+    parser.add_argument(
+        "--split-period", type=int, default=8,
+        help="连续重复循环的切分周期下限（小节）：周期达到该值的循环"
+        "在每遍起点切段（0 关闭；如 8 小节 Verse ×2 -> 第二遍是新段）",
     )
     parser.add_argument(
         "--name", action="append", default=None, metavar="A=Verse 1",

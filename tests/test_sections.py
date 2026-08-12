@@ -18,6 +18,7 @@ from gpchords.sections import (
     build_sections,
     detect_boundaries,
     extract_features,
+    _loop_copy_boundaries,
     segment_similarity,
     write_sections_to_gp,
 )
@@ -205,6 +206,47 @@ def test_constant_tempo_excluded():
     )
     bounds = detect_boundaries(feat, L=4, gap=4, kthr=0.4)
     assert not any("速度" in b.evidence for b in bounds)
+
+
+def test_tail_boundary_detected():
+    """novelty 允许尾部截断：最后 4 小节密度骤降应检出 Outro 边界。"""
+    n = 16
+    feat = SongFeatures(
+        chords=[("I", "maj")] * n,
+        density=[0.9] * 12 + [0.2] * 4,
+    )
+    bounds = detect_boundaries(feat, L=4, gap=4, kthr=0.4)
+    assert any(abs(b.bar - 13) <= 1 for b in bounds)
+
+
+def test_loop_copy_boundary_split():
+    """8 小节循环连续两遍 -> 第二遍起点（第 9 小节）是段落边界。"""
+    pattern = [
+        ("I", "maj"), ("V", "dom"), ("vi", "min"), ("IV", "maj"),
+        ("V", "dom"), ("vi", "min"), ("II", "maj"), ("V", "dom"),
+    ]
+    feat = SongFeatures(chords=pattern * 2)
+    assert _loop_copy_boundaries(feat.chords, min_period=8) == [9]
+    bounds = detect_boundaries(feat, L=4, gap=4, kthr=0.4, split_period=8)
+    assert any(b.bar == 9 for b in bounds)
+
+
+def test_short_loop_not_split():
+    """2 小节循环重复多次不切分（Intro 保持一段）。"""
+    pattern = [("I", "maj"), ("V", "dom")] * 8
+    assert _loop_copy_boundaries(pattern, min_period=8) == []
+
+
+def test_key_change_soft_not_forced():
+    """段内调号变化不再强制成边界（软信号）。"""
+    n = 12
+    feat = SongFeatures(
+        chords=[("I", "maj")] * n,
+        density=[0.5] * n,
+        hard_events={5: ["调号变化"]},
+    )
+    bounds = detect_boundaries(feat, L=4, gap=4, kthr=0.4)
+    assert not any(b.forced for b in bounds)
 
 
 def test_build_sections_letters_and_intro():
