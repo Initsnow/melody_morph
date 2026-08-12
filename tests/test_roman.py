@@ -293,7 +293,8 @@ def test_progression_label_multiline_and_shared_beat(tmp_path):
     m1 = verify.tracks[0].measures[0]
     b1 = m1.beats[0]
     assert b1.chord is not None  # 共享拍克隆后和弦引用没丢
-    assert b1.free_text == "P1: I-IV-V-vi\nIsus2"
+    # 单拍罗马数字在上、进行标注在下（进行放在罗马记号下面）
+    assert b1.free_text == "Isus2\nP1: I-IV-V-vi"
     m2 = verify.tracks[0].measures[1]
     assert m2.beats[0].chord is None  # 另一个共享位置不被污染
 
@@ -324,7 +325,52 @@ def test_overwrite_keeps_progression_label(tmp_path):
     verify = parse_gp(out)
     vb = verify.tracks[0].measures[0].beats[0]
     assert vb.chord is not None
-    assert vb.free_text == "P1: I-IV-V-vi\nI"
+    assert vb.free_text == "I\nP1: I-IV-V-vi"
+
+
+def test_overwrite_replaces_stale_progression_label(tmp_path):
+    """--overwrite 时整体替换旧注解：上次运行遗留的旧 P 行不再被
+    当成"用户文本"叠在新标注下面（回归：重复跑出三行 FreeText）。"""
+    gp = tmp_path / "mini.gp"
+    _mini_gp(gp)
+    song = parse_gp(gp)
+    track = song.tracks[0]
+    beat = track.measures[0].beats[0]
+    results = [_result_for(beat, 1, 0, chord("C", 0, "maj"))]
+    out = tmp_path / "mini_stale.gp"
+    stats = write_chords_to_gp(
+        str(gp),
+        str(out),
+        song,
+        track,
+        results,
+        key_root=0,
+        overwrite=True,
+        progression_labels={1: "P1: I-IV-V-vi"},
+        progression_romans={1: "I"},
+    )
+    assert stats["written"] == 1
+    # 第一遍：新两行文本
+    verify1 = parse_gp(out)
+    assert verify1.tracks[0].measures[0].beats[0].free_text == "I\nP1: I-IV-V-vi"
+    # 第二遍：输入已是带旧 P 行的文件，overwrite 仍整体替换，不叠三行
+    results2 = [_result_for(verify1.tracks[0].measures[0].beats[0], 1, 0, chord("C", 0, "maj"))]
+    out2 = tmp_path / "mini_stale2.gp"
+    write_chords_to_gp(
+        str(out),
+        str(out2),
+        parse_gp(out),
+        verify1.tracks[0],
+        results2,
+        key_root=0,
+        overwrite=True,
+        progression_labels={1: "P1: I-IV-V-vi"},
+        progression_romans={1: "I"},
+    )
+    verify2 = parse_gp(out2)
+    ft2 = verify2.tracks[0].measures[0].beats[0].free_text
+    assert ft2 == "I\nP1: I-IV-V-vi"
+    assert ft2.count("\n") == 1
 
 
 def test_restore_cdata_wraps_new_freetext():

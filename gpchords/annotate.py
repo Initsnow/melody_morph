@@ -1402,9 +1402,10 @@ def write_chords_to_gp(
     - ``progression_labels``: 小节序号 -> 循环进行注解（该 region 第一遍
       循环的完整罗马数字，如 ``P1: I-IV-V7-vi``；同一 family 的不同 region
       各标各的变体）。独立于和弦写回：即使该小节已有手工和弦也会写。
-      FreeText 支持多行，进行标注和单拍罗马数字（``progression_romans``
-      或拍上已有注解）合并成两行一起显示，互不顶替；因此后续的罗马数字
-      写回会跳过这些拍。
+      FreeText 两行：**单拍罗马数字在第一行、进行标注在第二行**
+      （即进行放在罗马记号下面）。默认保留拍上已有文本并把进行标注
+      追加其下；``--overwrite`` 时整体替换旧注解（含上次运行遗留的
+      旧 P 行），不会叠出三行。后续的罗马数字写回会跳过这些拍。
     - ``roman=True`` 时在同一拍写 <FreeText> 罗马数字注解（如 B 大调下
       Bsus2 -> Isus2），调性取该窗口所在小节的调号；已存在自由文本的拍
       默认保留用户原文，只有 --overwrite 才替换。小调默认按关系大调记
@@ -1489,10 +1490,19 @@ def write_chords_to_gp(
             roman_line = (
                 progression_romans.get(bar) if progression_romans else None
             )
-            if old_text and old_text != roman_line:
-                text = f"{label}\n{old_text}"  # 保留用户手写的单拍注解
+            if overwrite:
+                # --overwrite：整体替换旧注解（包括上次运行遗留的旧 P 行），
+                # 不再把旧文本叠在新标注下面。单拍罗马数字在上、进行在下。
+                text = (
+                    f"{roman_line}\n{label}"
+                    if roman and roman_line
+                    else label
+                )
+            elif old_text and old_text != roman_line:
+                # 保留用户手写的单拍注解，进行标注追加在其下
+                text = f"{old_text}\n{label}"
             elif roman and roman_line:
-                text = f"{label}\n{roman_line}"
+                text = f"{roman_line}\n{label}"
             else:
                 text = label
             _set_beat_freetext(beat_el, text)
@@ -1758,7 +1768,7 @@ def _detect_progressions(
     JSON payload)。进行标注按 region 生成：每个循环起点标该 region 第一遍
     循环的完整罗马数字（含品质，如 "P1: I-IV-V7-vi"），同一 family 的
     不同 region 各标各的变体；与单拍罗马数字分开存，写回时合并成
-    FreeText 的两行（进行标注 + "Isus2"），互不顶替。
+    FreeText 的两行（单拍罗马数字在上、进行标注在下），互不顶替。
     """
     n_bars = max((r["bar"] for r in results), default=0)
     tokens: list[Optional[tuple[str, str]]] = []
@@ -2184,9 +2194,9 @@ def main() -> None:
     parser.add_argument(
         "--progressions", action="store_true",
         help="检测循环和弦进行（重复的进行/变体重复），在每次循环起点写"
-        " 两行自由注解（第一行该处循环实际进行的完整罗马数字、含品质，"
-        "如 P1: I-IV-V7-vi；同一进行不同循环区各标各的变体；"
-        "第二行该拍罗马数字）",
+        " 两行自由注解（第一行该拍罗马数字、第二行该处循环实际进行的"
+        "完整罗马数字、含品质，如 P1: I-IV-V7-vi；同一进行不同循环区"
+        "各标各的变体；--overwrite 时整体替换旧注解）",
     )
     parser.add_argument("--no-compare", action="store_true", help="不做手工标注对照")
     parser.add_argument("--demo", action="store_true", help="运行算法演示")
