@@ -608,12 +608,28 @@ def detect_boundaries(
                 peaks.append(b)
                 rep_peaks.add(b)
 
-    # 连续重复循环：周期 ≥ split_period 的循环在每遍起点切分
+    # 连续重复循环：周期 ≥ split_period 的循环在每遍起点切分，**但必须有
+    # 独立实锤**——轨道集合变化、鼓型变化（逐小节或按循环两半聚合比较）、
+    # 密度/人声/闷音/和声密度变化、硬信号。光"8 小节重复了两遍"不切：
+    # I-V-vi-IV × 8 重复两遍且编曲不变时是一整段，不是两个段落。
     if split_period and features.chords:
-        for bar in _loop_copy_boundaries(features.chords, split_period):
-            idx = bar - 1
-            if not any(abs(idx - p) <= 1 for p in peaks):
-                peaks.append(idx)
+        for f in find_loop_families(features.chords):
+            if f.period < split_period:
+                continue
+            for start, end in f.occurrences:
+                copies = (end - start + 1) // f.period
+                for k in range(1, copies):
+                    bar = start + k * f.period
+                    idx = bar - 1
+                    if not (0 < idx < n):
+                        continue
+                    # 已有 novelty/rep/硬信号边界的（±1）视为已实锤
+                    if any(abs(idx - p) <= 1 for p in peaks):
+                        continue
+                    if _copy_boundary_corroborated(
+                        features, f, start, end, k, bar
+                    ):
+                        peaks.append(idx)
 
     for idx in sorted(forced_indices):
         if not any(abs(idx - p) <= 1 for p in peaks):
@@ -700,19 +716,63 @@ def _peaks(curve: list[float], gap: int, threshold: float) -> list[int]:
     return out
 
 
-def _loop_copy_boundaries(
-    chords: list[Optional[tuple[str, str]]], min_period: int
-) -> list[int]:
-    """连续重复循环的每遍起点（1 起）：8 小节 Verse ×2 -> 第二遍起点。"""
-    out: list[int] = []
-    for f in find_loop_families(chords):
-        if f.period < min_period:
-            continue
-        for start, end in f.occurrences:
-            copies = (end - start + 1) // f.period
-            for k in range(1, copies):
-                out.append(start + k * f.period)
-    return out
+def _copy_boundary_corroborated(
+    features: SongFeatures,
+    family,
+    start: int,
+    end: int,
+    copy_idx: int,
+    bar: int,
+) -> bool:
+    """循环第 copy_idx+1 遍的起点 bar 是否有独立变化实锤。"""
+    idx = bar - 1
+    if bar in features.hard_events:
+        return True
+    # 轨道活动组合变化（如《无论如何》25 小节 Lead Guitar 加入）
+    if (
+        features.track_act
+        and features.track_act[idx] != features.track_act[idx - 1]
+    ):
+        return True
+    # 鼓：逐小节指纹跳变，或按循环两半聚合比较（鼓手每小节微变，聚合
+    # 比较才能看出"这半和上半的 groove 不同"，如《无论如何》66 小节）
+    if features.drums is not None:
+        if _jaccard(features.drums[idx - 1], features.drums[idx]) <= 0.6:
+            return True
+        period = family.period
+        if _jaccard(
+            set().union(*features.drums[start - 1 : start - 1 + period]),
+            set().union(*features.drums[bar - 1 : bar - 1 + period]),
+        ) <= 0.6:
+            return True
+    # 密度（编曲厚度）跳变
+    if (
+        features.density
+        and abs(features.density[idx] - features.density[idx - 1]) >= 0.15
+    ):
+        return True
+    # 人声活动 / 人声旋律
+    if (
+        features.vocal_act is not None
+        and abs(features.vocal_act[idx] - features.vocal_act[idx - 1]) >= 1.0
+    ):
+        return True
+    if features.vocal_pitch is not None:
+        va, vb = features.vocal_pitch[idx - 1], features.vocal_pitch[idx]
+        if va is not None and vb is not None and abs(va - vb) >= 4.0:
+            return True
+    # 闷音比例 / 和声节奏密度
+    if (
+        features.palm
+        and abs(features.palm[idx] - features.palm[idx - 1]) >= 0.2
+    ):
+        return True
+    if (
+        features.harm_rhythm
+        and features.harm_rhythm[idx] != features.harm_rhythm[idx - 1]
+    ):
+        return True
+    return False
 
 
 def _evidence_at(

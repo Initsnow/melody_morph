@@ -18,7 +18,6 @@ from gpchords.sections import (
     build_sections,
     detect_boundaries,
     extract_features,
-    _loop_copy_boundaries,
     segment_similarity,
     write_sections_to_gp,
 )
@@ -219,22 +218,46 @@ def test_tail_boundary_detected():
     assert any(abs(b.bar - 13) <= 1 for b in bounds)
 
 
-def test_loop_copy_boundary_split():
-    """8 小节循环连续两遍 -> 第二遍起点（第 9 小节）是段落边界。"""
-    pattern = [
+def _eight_bar_pattern() -> list[tuple[str, str]]:
+    return [
         ("I", "maj"), ("V", "dom"), ("vi", "min"), ("IV", "maj"),
         ("V", "dom"), ("vi", "min"), ("II", "maj"), ("V", "dom"),
     ]
-    feat = SongFeatures(chords=pattern * 2)
-    assert _loop_copy_boundaries(feat.chords, min_period=8) == [9]
+
+
+def test_clean_repeated_loop_not_split():
+    """8 小节循环重复两遍但编曲无变化 -> 不切分（泛化关键）。"""
+    pattern = _eight_bar_pattern()
+    n = len(pattern) * 2
+    feat = SongFeatures(
+        chords=pattern * 2,
+        density=[0.5] * n,
+        track_act=[frozenset({0})] * n,
+        palm=[0.0] * n,
+        harm_rhythm=[1.0] * n,
+    )
     bounds = detect_boundaries(feat, L=4, gap=4, kthr=0.4, split_period=8)
-    assert any(b.bar == 9 for b in bounds)
+    assert not any(abs(b.bar - 9) <= 1 for b in bounds)
+
+
+def test_repeated_loop_split_with_drum_change():
+    """循环两遍的鼓 groove 变了 -> 第二遍起点（第 9 小节）切分。"""
+    pattern = _eight_bar_pattern()
+    n = len(pattern) * 2
+    drums = [frozenset({(0, 36), (2, 42)})] * 8 + [
+        frozenset({(0, 36), (1, 42)})
+    ] * 8
+    feat = SongFeatures(chords=pattern * 2, drums=drums, density=[0.5] * n)
+    bounds = detect_boundaries(feat, L=4, gap=4, kthr=0.4, split_period=8)
+    assert any(abs(b.bar - 9) <= 1 for b in bounds)
 
 
 def test_short_loop_not_split():
     """2 小节循环重复多次不切分（Intro 保持一段）。"""
     pattern = [("I", "maj"), ("V", "dom")] * 8
-    assert _loop_copy_boundaries(pattern, min_period=8) == []
+    feat = SongFeatures(chords=pattern, density=[0.5] * 16)
+    bounds = detect_boundaries(feat, L=4, gap=4, kthr=0.4, split_period=8)
+    assert not any(b.bar in (3, 5, 7) for b in bounds)
 
 
 def test_key_change_soft_not_forced():
