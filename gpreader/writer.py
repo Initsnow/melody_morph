@@ -79,6 +79,37 @@ def restore_cdata(xml_text: str, pairs: list[tuple[str, str, str, str]]) -> str:
     return xml_text
 
 
+def restore_section_cdata(xml_text: str) -> str:
+    """把新增段落标记（<Section>）里的 Letter/Text 包成 CDATA。
+
+    GP8 的 GPIFReader 只认 CDATA 形式的段落文本（实测），而 ET 序列化
+    不产生 CDATA；只处理 Section 内部的 Letter/Text，避免误伤
+    <Lyrics><Line><Text> 等其他同名标签。
+    """
+
+    def wrap(tag: str, inner: str) -> str:
+        inner = inner.strip()
+        if inner and inner.startswith("<![CDATA[") and inner.endswith("]]>"):
+            wrapped = inner
+        else:
+            wrapped = f"<![CDATA[{inner}]]>"
+        return f"<{tag}>{wrapped}</{tag}>"
+
+    def fix_section(match) -> str:
+        body = match.group(1)
+        body = re.sub(
+            r"<(Letter|Text)>(.*?)</\1>",
+            lambda m: wrap(m.group(1), m.group(2)),
+            body,
+            flags=re.S,
+        )
+        return "<Section>" + body + "</Section>"
+
+    return re.sub(
+        r"<Section>(.*?)</Section>", fix_section, xml_text, flags=re.S
+    )
+
+
 def read_gpif(input_path: str | Path) -> tuple[ET.Element, str]:
     """读入原始 GPIF XML 树，返回 (根元素, 文件名)。"""
     with zipfile.ZipFile(input_path) as zin:
@@ -90,10 +121,17 @@ def read_gpif(input_path: str | Path) -> tuple[ET.Element, str]:
     return ET.fromstring(xml_bytes), gpif_name
 
 
-def write_gpif(input_path: str | Path, output_path: str | Path, root: ET.Element) -> None:
+def write_gpif(
+    input_path: str | Path,
+    output_path: str | Path,
+    root: ET.Element,
+    extra_fix=None,
+) -> None:
     """把修改后的 GPIF XML 树写回新的 .gp/.gpx 文件（原文件不动）。
 
     逐项保留原 zip 的压缩方式、时间戳与 extra 属性——GP8 对 zip 容器结构敏感。
+    ``extra_fix``：可选回调，在 CDATA 恢复后、写盘前对 XML 文本做追加处理
+    （如 gpchords 的段落写回需要把新增 <Section> 的 Letter/Text 包成 CDATA）。
     """
     with zipfile.ZipFile(input_path) as zin:
         infos = zin.infolist()
@@ -105,6 +143,8 @@ def write_gpif(input_path: str | Path, output_path: str | Path, root: ET.Element
     xml_text = restore_cdata(
         xml_text, cdata_pairs_from(file_data[gpif_name].decode("utf-8"))
     )
+    if extra_fix is not None:
+        xml_text = extra_fix(xml_text)
     xml_bytes = (
         '<?xml version="1.0" encoding="utf-8"?>\n'.encode("utf-8")
         + xml_text.encode("utf-8")

@@ -79,6 +79,12 @@ from gpreader import (
     select_tracks,
 )
 from gpreader.writer import read_gpif, write_gpif
+from gpchords.progression import (
+    LoopFamily,
+    chord_token,
+    find_loop_families,
+    loop_label,
+)
 from gpchords.roman import chord_to_roman
 
 # ---------------------------------------------------------------------------
@@ -1383,6 +1389,7 @@ def write_chords_to_gp(
     overwrite: bool = False,
     roman: bool = True,
     roman_minor_as_tonic: bool = False,
+    progression_labels: Optional[dict[int, str]] = None,
 ) -> dict:
     """
     把自动识别的和弦写回一个新的 .gp 文件（原文件不被修改）。
@@ -1391,6 +1398,10 @@ def write_chords_to_gp(
     - 同名和弦已存在于轨道和弦库时直接复用，否则新增 Item（含和弦构成与指板图）。
     - 每个分析窗口挂到该窗口的第一个有音符的拍上。
     - 已有手工标注的小节默认跳过（--overwrite 时强制覆盖）。
+    - ``progression_labels``: 小节序号 -> 循环进行注解（如 ``P1: I-IV-V-vi``）。
+      独立于和弦写回：即使该小节已有手工和弦/自由文本也会写（替换该拍原有
+      FreeText，与"同拍只能有一个 FreeText"的 GP 限制一致）；因此后续的
+      罗马数字写回会跳过这些拍。
     - ``roman=True`` 时在同一拍写 <FreeText> 罗马数字注解（如 B 大调下
       Bsus2 -> Isus2），调性取该窗口所在小节的调号；已存在自由文本的拍
       默认保留用户原文，只有 --overwrite 才替换。小调默认按关系大调记
@@ -1431,6 +1442,46 @@ def write_chords_to_gp(
 
     numeric_ids = [int(i) for i in beat_els if i.isdigit()]
     next_beat_id = max(numeric_ids) + 1 if numeric_ids else len(beat_els) + 1
+    cloned = 0
+
+    # --- 先写循环进行注解（独立于和弦写回，不受手工和弦跳过规则影响） ----------
+    prog_written = 0
+    if progression_labels:
+        for bar, label in sorted(progression_labels.items()):
+            if not (0 < bar <= len(track.measures)):
+                continue
+            anchor = _find_anchor_beat(
+                track.measures[bar - 1],
+                {"start_quarters": 0.0, "duration_quarters": 0.0},
+            )
+            if anchor is None:
+                continue
+            voice_el = voice_els.get(anchor.voice_id)
+            if voice_el is None:
+                continue
+            beats_tokens = (voice_el.findtext("Beats") or "").split()
+            pos = anchor.position_in_voice
+            if pos >= len(beats_tokens):
+                continue
+            current_id = beats_tokens[pos]
+            beat_el = beat_els.get(current_id)
+            if beat_el is None:
+                continue
+            if len(usage.get(current_id, [])) > 1:
+                new_id = str(next_beat_id)
+                next_beat_id += 1
+                new_beat = copy.deepcopy(beat_el)
+                new_beat.set("id", new_id)
+                if beats_container is not None:
+                    beats_container.append(new_beat)
+                beats_tokens[pos] = new_id
+                beats_el = voice_el.find("Beats")
+                if beats_el is not None:
+                    beats_el.text = " ".join(beats_tokens)
+                beat_el = new_beat
+                cloned += 1
+            _set_beat_freetext(beat_el, label)
+            prog_written += 1
 
     # 第一遍：先决定哪些窗口真的会写入（跳过的不会进和弦库），
     # 避免"全部被跳过"时仍往 DiagramCollection 追加一堆无人引用的死项。
@@ -1505,7 +1556,7 @@ def write_chords_to_gp(
             working_el.append(working_item)
 
     # --- 写拍引用 ----------------------------------------------------------
-    written = cloned = 0
+    written = 0  # cloned 延续上面的进行注解克隆计数
     rewritten_beat_ids: set[str] = set()
     for r, voice_el, pos, current_id, beat_el in writable:
         beats_tokens = (voice_el.findtext("Beats") or "").split()
@@ -1577,6 +1628,7 @@ def write_chords_to_gp(
         "missing_beats": missing,
         "cloned": cloned,
         "new_chords": len(new_names),
+        "progression_labels": prog_written,
         "total_chords_in_library": len(verify_track.chords) if verify_track else len(track.chords),
         "annotated_beats": annotated_beats,
         "free_text_beats": free_text_beats,
@@ -1671,6 +1723,54 @@ def _analyze_measures(
     return results
 
 
+def _detect_progressions(
+    results: list[dict],
+) -> tuple[list[LoopFamily], dict[int, str], list[dict]]:
+    """从分析结果构造逐小节 token，检测循环进行并生成标注映射。
+
+    返回 (families, {小节序号: 标注文本}, JSON payload)。
+    """
+    n_bars = max((r["bar"] for r in results), default=0)
+    tokens: list[Optional[tuple[str, str]]] = []
+    for bar in range(1, n_bars + 1):
+        tok = None
+        for r in results:
+            if r["bar"] == bar and r["chord"]:
+                tok = chord_token(r["chord"], r["key_root"], r["key_mode"])
+                break
+        tokens.append(tok)
+    families = find_loop_families(tokens)
+    labels: dict[int, str] = {}
+    for f in families:
+        for start, _ in f.occurrences:
+            labels.setdefault(start, loop_label(f))
+    payload = [
+        {
+            "id": f.id,
+            "pattern": f.pattern,
+            "period": f.period,
+            "occurrences": [list(o) for o in f.occurrences],
+            "copies": f.copies,
+            "coverage": f.coverage,
+        }
+        for f in families
+    ]
+    return families, labels, payload
+
+
+def _print_progressions(families: list[LoopFamily]) -> None:
+    if not families:
+        print("未检测到重复的循环进行。")
+        return
+    print("检测到循环进行:")
+    for f in families:
+        occ = "、".join(f"{s}-{e}" for s, e in f.occurrences)
+        print(
+            f"  {loop_label(f)}  （{f.period} 小节循环"
+            f" × {f.copies} 遍: 第 {occ} 小节）"
+        )
+
+
 def _print_debug(results: list[dict], args) -> None:
     if not args.debug:
         return
@@ -1703,6 +1803,7 @@ def _write_back(
     args, song: GPSong, tracks: list[GPTrack], track_results: dict[int, list[dict]],
     write_keys: dict[int, int], merged_results: Optional[list[dict]],
     merged_key_root: Optional[int],
+    progression_labels: Optional[dict] = None,
 ) -> None:
     """写回 .gp：默认分析模式写全部分析轨道，合并模式写第一个分析轨道。"""
     if args.no_write:
@@ -1723,9 +1824,11 @@ def _write_back(
             measures_by_bar = {m.index: m for m in target.measures}
             target_results = reanchor_results(merged_results, target, measures_by_bar)
             key_root = merged_key_root
+            labels = progression_labels.get("merged") if progression_labels else None
         else:
             target_results = track_results[target.id]
             key_root = write_keys[target.id]
+            labels = progression_labels.get(target.id) if progression_labels else None
         stats = write_chords_to_gp(
             current_input,
             output_path,
@@ -1736,6 +1839,7 @@ def _write_back(
             overwrite=args.overwrite,
             roman=not args.no_roman,
             roman_minor_as_tonic=args.roman_tonic_minor,
+            progression_labels=labels,
         )
         current_input = output_path
         print(
@@ -1781,6 +1885,10 @@ def run_analysis(args) -> list[dict]:
             + " + ".join(f"[{t.id}] {t.name}" for t in tracks)
             + f"  窗口: {args.window}  风格: {args.style}"
         )
+        prog_families = prog_labels = prog_payload = None
+        if args.progressions:
+            prog_families, prog_labels, prog_payload = _detect_progressions(results)
+            _print_progressions(prog_families)
         _print_debug(results, args)
         print(f"共分析 {len(results)} 个窗口。")
         comparison = []
@@ -1798,6 +1906,7 @@ def run_analysis(args) -> list[dict]:
                 "window": args.window,
                 "style": args.style,
                 "results": results,
+                "progressions": prog_payload,
                 "manual_comparison": comparison,
             }
             with open(args.out, "w", encoding="utf-8") as f:
@@ -1807,12 +1916,16 @@ def run_analysis(args) -> list[dict]:
         _write_back(
             args, song, tracks, {}, {primary.id: key_root},
             merged_results=results, merged_key_root=key_root,
+            progression_labels=(
+                {"merged": prog_labels} if prog_labels is not None else None
+            ),
         )
         return results
 
     # 分析模式（默认）：每个轨道单独分析、单独标注
     track_results: dict[int, list[dict]] = {}
     write_keys: dict[int, int] = {}
+    track_prog_labels: dict[int, dict[int, str]] = {}
     payload_tracks: list[dict] = []
     last_results: list[dict] = []
     for track in tracks:
@@ -1825,6 +1938,10 @@ def run_analysis(args) -> list[dict]:
             print("调性模式: 每小节调号（无调号回退全局）")
         results = _analyze_measures(track, keys_by_bar, segmenter, args)
         print(f"轨道: [{track.id}] {track.name}  窗口: {args.window}  风格: {args.style}")
+        prog_families = prog_labels = prog_payload = None
+        if args.progressions:
+            prog_families, prog_labels, prog_payload = _detect_progressions(results)
+            _print_progressions(prog_families)
         _print_debug(results, args)
         print(f"共分析 {len(results)} 个窗口。")
         comparison = []
@@ -1833,6 +1950,8 @@ def run_analysis(args) -> list[dict]:
             print_comparison(comparison)
         track_results[track.id] = results
         write_keys[track.id] = key_root
+        if prog_labels is not None:
+            track_prog_labels[track.id] = prog_labels
         last_results = results
         payload_tracks.append(
             {
@@ -1840,6 +1959,7 @@ def run_analysis(args) -> list[dict]:
                 "name": track.name,
                 "key": f"{pc_name(key_root, key_root)}{'m' if key_mode == 'Minor' else ''}",
                 "results": results,
+                "progressions": prog_payload,
                 "manual_comparison": comparison,
             }
         )
@@ -1859,6 +1979,7 @@ def run_analysis(args) -> list[dict]:
                     "track": {"id": primary.id, "name": primary.name},
                     "key": payload_tracks[0]["key"],
                     "results": payload_tracks[0]["results"],
+                    "progressions": payload_tracks[0]["progressions"],
                     "manual_comparison": payload_tracks[0]["manual_comparison"],
                 }
             )
@@ -1866,7 +1987,16 @@ def run_analysis(args) -> list[dict]:
             json.dump(payload, f, ensure_ascii=False, indent=2)
         print(f"已保存: {args.out}")
 
-    _write_back(args, song, tracks, track_results, write_keys, None, None)
+    _write_back(
+        args,
+        song,
+        tracks,
+        track_results,
+        write_keys,
+        None,
+        None,
+        progression_labels=track_prog_labels or None,
+    )
     return last_results
 
 
@@ -1953,6 +2083,11 @@ def main() -> None:
     parser.add_argument(
         "--roman-tonic-minor", action="store_true",
         help="小调罗马数字按主音小调记（Am -> i；默认按关系大调：Am -> vi）",
+    )
+    parser.add_argument(
+        "--progressions", action="store_true",
+        help="检测循环和弦进行（重复的进行/变体重复），在每次循环起点写"
+        " P1: I-IV-V-vi 式自由注解（该拍不再写单和弦罗马数字）",
     )
     parser.add_argument("--no-compare", action="store_true", help="不做手工标注对照")
     parser.add_argument("--demo", action="store_true", help="运行算法演示")

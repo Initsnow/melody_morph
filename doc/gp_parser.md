@@ -77,8 +77,10 @@ for measure in track.measures:
 ## 命令行
 
 `gpreader` 是纯读取库（`from gpreader import parse_gp`），不提供用户命令；
-`gpchords` 包在其上提供三个命令：`gp-info`（查看内部结构，调试用）、
-`gp-chords`（自动标注和弦，用户入口）和 `gp-key`（自动判断调性并写入调号）。
+`gpchords` 包在其上提供四个命令：`gp-info`（查看内部结构，调试用）、
+`gp-chords`（自动标注和弦 + `--progressions` 检测循环进行）、`gp-key`
+（自动判断调性并写入调号）和 `gp-sections`（自动分段，见
+[gp_sections.md](gp_sections.md)）。
 
 ### 查看轨道内容
 

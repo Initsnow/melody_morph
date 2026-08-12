@@ -155,6 +155,15 @@ class GPSong:
     artist: str = ""
     album: str = ""
     tracks: list[GPTrack] = field(default_factory=list)
+    # 小节序号（0 起）-> BPM，来自 <MasterTrack><Automations><Automation Type="Tempo">
+    tempos: dict[int, int] = field(default_factory=dict)
+
+    def tempo_at(self, bar_index: int) -> Optional[int]:
+        """取指定小节（0 起）的速度：优先本小节 automation，否则向前找最近一个。"""
+        for i in range(bar_index, -1, -1):
+            if i in self.tempos:
+                return self.tempos[i]
+        return None
 
 
 def detect_format(path: str | Path) -> tuple[str, str]:
@@ -272,6 +281,21 @@ def parse_gp(path: str | Path) -> GPSong:
 def _parse_gpif(root: ET.Element, version: str) -> GPSong:
     # GPVersion（XML 内）是实际保存程序的版本，VERSION 文件只是格式类别
     song = GPSong(gp_version=(root.findtext("GPVersion") or version).strip())
+
+    # 速度 automation：<Value>97 2</Value> 第一个数是 BPM
+    master_track = root.find("MasterTrack")
+    if master_track is not None:
+        for auto in master_track.findall("Automations/Automation"):
+            if (auto.findtext("Type") or "").strip() != "Tempo":
+                continue
+            bar_text = (auto.findtext("Bar") or "").strip()
+            value_text = (auto.findtext("Value") or "").strip()
+            if not bar_text.lstrip("-").isdigit() or not value_text:
+                continue
+            try:
+                song.tempos[int(bar_text)] = int(float(value_text.split()[0]))
+            except ValueError:
+                continue
 
     score = root.find("Score")
     if score is not None:

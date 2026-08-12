@@ -13,6 +13,7 @@ dependencies = [
 gp-chords = "gpchords.annotate:main"
 gp-info = "gpchords.info:main"
 gp-key = "gpchords.keywriter:main"
+gp-sections = "gpchords.sections:main"
 
 [build-system]
 requires = ["hatchling"]

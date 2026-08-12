@@ -13,6 +13,7 @@ MIDI 旋律处理工具集 - 用于音乐制作中的旋律修改、和弦分配
 | `midi_to_ust.py` | MIDI 旋律转调内唱名 UST | [文档](doc/midi_to_ust.md) |
 | `gpreader/` | Guitar Pro (.gp/.gpx) 独立读取库（解析 GPIF、文件层写回） | [文档](doc/gp_parser.md) |
 | `gpchords/` | 和弦自动标注（`gp-chords`）、调性写入（`gp-key`）等命令 | [文档](doc/gp_parser.md) |
+| `gp-sections` | 自动分段：多特征检测段落边界、聚类命名并写回 `<Section>` 标记 | [文档](doc/gp_sections.md) |
 
 ## 快速开始
 
@@ -45,6 +46,10 @@ uv run python midi_to_ust.py input.mid -o output.ust
 # 自动标注和弦：交互选择轨道 -> 识别 -> 自动写回 <原名>_chords.gp（原文件不变）
 uv run gp-chords "song.gp"
 
+# 额外检测循环和弦进行：在每次循环起点写 P1: I-IV-V-vi 式自由注解
+# （该拍不再写单和弦罗马数字；即使小节已有手工和弦也照写）
+uv run gp-chords "song.gp" --track "Rhythm Guitar" --progressions
+
 # 自动判断调性并写入全部小节 -> <原名>_key.gp（原文件不变）
 uv run gp-key "song.gp"
 
@@ -75,6 +80,14 @@ uv run gp-chords "song.gp" --key-per-section
 
 # 查看文件内部结构（调试用）
 uv run gp-info "song.gp" --track "Lead Guitar"
+
+# 自动分段：多特征 novelty + 重复起点检测边界，段落聚类命名后写回
+# <原名>_sections.gp（所有段都带字母；已有段落的小节默认跳过）
+uv run gp-sections "song.gp"
+
+# 只预览候选边界和触发证据（推荐先看再写回）；--name 可自定义段落文本
+uv run gp-sections "song.gp" --no-write
+uv run gp-sections "song.gp" --name "A=Verse 1" --out sections.json
 ```
 
 ## 演示
