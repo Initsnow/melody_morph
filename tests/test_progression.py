@@ -155,3 +155,49 @@ def test_detect_progressions_region_labels():
         {"start": 1, "end": 8, "label": "P1: I-IV-V7-vi"},
         {"start": 13, "end": 20, "label": "P1: I-IV-V-vi"},
     ]
+
+
+def test_periodic_block_reduces_to_shorter_loop():
+    """6 小节 V-I-V-I-V-I 是 2 小节循环的重复切片：约简成 2 小节，
+    循环起点不再被长周期平移窗口带偏。"""
+    seq = [tok("V"), tok("I")] * 8 + [tok("IV"), tok("II"), tok("V"), tok("III")]
+    fams = find_loop_families(seq)
+    assert len(fams) == 1
+    f = fams[0]
+    assert f.period == 2
+    assert f.occurrences == [(1, 16)]
+    assert f.pattern == ["V", "I"]
+
+
+def test_periodic_with_rest_keeps_longer_period():
+    """[V, I, 休, I] 的 4 小节循环：跨小节休止打断短周期重链，
+    不能约简成 2 小节（否则会丢失真实的休止结构）。"""
+    seq = [tok("V"), tok("I"), None, tok("I")] * 2
+    fams = find_loop_families(seq)
+    assert len(fams) == 1
+    f = fams[0]
+    assert f.period == 4
+    assert f.occurrences == [(1, 8)]
+    assert f.pattern == ["V", "I", "I"]
+
+
+def test_per_occurrence_conflict_keeps_intro_region():
+    """intro 的 2 小节 V-I 循环与副歌区 6 小节 family 撞车时，
+    只丢冲突的副歌区，intro 区保留——整个 family 被误杀会导致
+    intro 起点没有进行标注。"""
+    intro = [tok("V"), tok("I")] * 4                        # 1-8
+    filler = [tok("IV"), tok("II"), tok("V"), tok("III")]   # 9-12
+    verse_block = (
+        [tok("V"), tok("V"), tok("V"), tok("I"), tok("V"), tok("I")]
+        + [tok("V"), tok("I")] * 9                          # 13-36
+    )
+    verse2 = (
+        [tok("V"), tok("V"), tok("V"), tok("I"), tok("V"), tok("I")]
+        + [tok("V"), tok("I")] * 9                          # 37-60
+    )
+    pickup_only = [tok("V"), tok("V"), tok("V"), tok("I"), tok("V"), tok("I")] * 3  # 61-78
+    seq = intro + filler + verse_block + verse2 + pickup_only
+    fams = find_loop_families(seq)
+    by_period = {f.period: f for f in fams}
+    assert by_period[2].occurrences == [(1, 8)]
+    assert by_period[6].occurrences == [(13, 78)]

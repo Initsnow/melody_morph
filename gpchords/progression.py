@@ -14,7 +14,18 @@
 2. **模式聚类**：同一周期的运行按模式 LCS 相似度（默认 0.7）归成
    loop family——分散在曲中各处的同名循环（副歌 1 / 副歌 2）共享一个
    family。最后按（覆盖小节数多优先，同覆盖取周期短）贪心去掉互相重叠的
-   family，避免段落级重复把和声级小循环挤掉的反向误伤。
+   family，避免段落级重复把和声级小循环挤掉的反向误伤。冲突按 occurrence
+   逐区让位：只丢与已选 family 撞车的区，不误杀整个 family 的其他区。
+
+两个防错位机制：
+
+- **周期约简**：块的度数是更短周期的精确重复时（6 小节 V-I-V-I-V-I
+  本质是 2 小节循环重复 3 遍），按短周期重新链接。否则同一段和声会被
+  长周期平移窗口切走，循环起点跟着偏（如 intro 的 V-I 循环被标成从
+  第 3 小节开始的 6 小节窗口）。跨小节休止打断短周期重链时保留原周期。
+- **非原始切片不独占起点**：同一段音乐同时存在短周期与长周期切片时，
+  覆盖计算按保留后的 occurrence 重算，长周期 family 不会因为吞掉别的区
+  而把短周期的正确起点整体挤掉。
 
 标注粒度：freetext 写在每个**连续运行区**（region）的起点，而不是循环的
 每一遍——Intro 的 2 小节循环重复 4 遍只标一处，不会刷屏。标注内容是
@@ -113,6 +124,31 @@ def _block_degree_sim(
     return hits / period
 
 
+def _primitive_period(
+    block: list[Optional[tuple[str, str]]]
+) -> int:
+    """块的最小真周期：位置 k 与 k-d 的度数一致（None 视为通配）。
+
+    返回能整除块长的最小 d；没有则返回块长。用于识别"周期是短循环
+    整数倍的重复切片"（如 6 小节的 V-I-V-I-V-I 本质是 2 小节循环
+    重复 3 遍），把这些切片还原成短循环，避免循环起点被长周期
+    平移窗口带偏。
+    """
+    n = len(block)
+    for d in range(1, n):
+        if n % d:
+            continue
+        ok = True
+        for k in range(d, n):
+            a, b = block[k], block[k - d]
+            if a is not None and b is not None and a[0] != b[0]:
+                ok = False
+                break
+        if ok:
+            return d
+    return n
+
+
 def _lcs_sim(a: list[str], b: list[str]) -> float:
     """两条度数序列的 LCS 相似度（长度可能因 None 通配而不同，按较长者归一化）。"""
     if not a and not b:
@@ -165,6 +201,40 @@ def find_loop_families(
             ) / (copies - 1)
             if quality >= min_ratio:
                 runs.append((p, i, copies, quality))
+
+    # 周期约简：块的度数是更短周期的精确重复时（如 6 小节 V-I-V-I-V-I
+    # 本质是 2 小节循环重复 3 遍），按短周期重新链接。消除"同一段和声
+    # 被长周期平移切片"的错位——如 intro 的 V-I 循环被切成从第 3 小节
+    # 开始的 6 小节窗口。重链失败（如跨小节休止打断短周期）则保留原周期。
+    reduced: list[tuple[int, int, int, float]] = []
+    for p, i, copies, quality in runs:
+        d = _primitive_period(tokens[i : i + p])
+        if d < p and d >= min_period:
+            copies_d = 1
+            while (
+                i + (copies_d + 1) * d <= n
+                and _block_degree_sim(
+                    tokens,
+                    i + (copies_d - 1) * d,
+                    i + copies_d * d,
+                    d,
+                )
+                >= min_ratio
+            ):
+                copies_d += 1
+            if copies_d >= 2:
+                # 左极大同样适用于约简后的短周期
+                if i >= d and _block_degree_sim(tokens, i - d, i, d) >= min_ratio:
+                    continue
+                quality_d = sum(
+                    _block_degree_sim(tokens, i + k * d, i + (k + 1) * d, d)
+                    for k in range(copies_d - 1)
+                ) / (copies_d - 1)
+                if quality_d >= min_ratio:
+                    reduced.append((d, i, copies_d, quality_d))
+                    continue
+        reduced.append((p, i, copies, quality))
+    runs = reduced
 
     # 同一周期内：滑动错位会产生大量互相重叠（≥2 小节）的同款运行，
     # 只保留质量最高的一条（对齐最好），其余是同一段和声的平移窗口
@@ -226,18 +296,29 @@ def find_loop_families(
                 kept.append(occ)
         f.occurrences = kept
 
-    # 覆盖多优先（真正解释更多音乐的循环留下），同覆盖取周期短；
-    # 重叠（≥1 小节）冲突时留前者，避免跨段落边界的碎片模式混进来
+    # 覆盖多优先（真正解释更多音乐的循环留下），同覆盖取周期短。重叠
+    # 冲突按 occurrence 逐区让位：只丢与已选 family 冲突的区，而不是
+    # 整个 family——否则 intro 的 2 小节 V-I 循环会因副歌区与长周期
+    # family 撞车而被整体误杀，起点标注跟着消失。
     selected: list[LoopFamily] = []
     for f in sorted(families, key=lambda f: (-f.coverage, f.period)):
-        if f.coverage < min_coverage:
-            continue
-        if any(
-            _overlap(o, o2) >= 1
+        kept_occ = [
+            o
             for o in f.occurrences
-            for g in selected
-            for o2 in g.occurrences
-        ):
+            if not any(
+                _overlap(o, o2) >= 1
+                for g in selected
+                for o2 in g.occurrences
+            )
+        ]
+        if not kept_occ:
+            continue
+        f.occurrences = kept_occ
+        f.copies = sum((e - s + 1) // f.period for s, e in kept_occ)
+        f.coverage = sum(
+            ((e - s + 1) // f.period - 1) * f.period for s, e in kept_occ
+        )
+        if f.coverage < min_coverage:
             continue
         selected.append(f)
 

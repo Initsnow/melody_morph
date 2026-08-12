@@ -298,6 +298,35 @@ def test_progression_label_multiline_and_shared_beat(tmp_path):
     assert m2.beats[0].chord is None  # 另一个共享位置不被污染
 
 
+def test_overwrite_keeps_progression_label(tmp_path):
+    """--overwrite 时罗马数字写回不能顶掉刚写好的循环进行注解
+    （回归：进行标注先写、和弦罗马后写，overwrite 直接替换 FreeText
+    导致 P 行整行消失，谱面上只剩单拍罗马数字）。"""
+    gp = tmp_path / "mini.gp"
+    _mini_gp(gp)
+    song = parse_gp(gp)
+    track = song.tracks[0]
+    beat = track.measures[0].beats[0]
+    results = [_result_for(beat, 1, 0, chord("C", 0, "maj"))]
+    out = tmp_path / "mini_overwrite.gp"
+    stats = write_chords_to_gp(
+        str(gp),
+        str(out),
+        song,
+        track,
+        results,
+        key_root=0,
+        overwrite=True,
+        progression_labels={1: "P1: I-IV-V-vi"},
+        progression_romans={1: "I"},
+    )
+    assert stats["written"] == 1
+    verify = parse_gp(out)
+    vb = verify.tracks[0].measures[0].beats[0]
+    assert vb.chord is not None
+    assert vb.free_text == "P1: I-IV-V-vi\nI"
+
+
 def test_restore_cdata_wraps_new_freetext():
     from gpreader.writer import restore_cdata
 

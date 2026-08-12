@@ -1449,6 +1449,7 @@ def write_chords_to_gp(
 
     # --- 先写循环进行注解（独立于和弦写回，不受手工和弦跳过规则影响） ----------
     prog_written = 0
+    prog_beat_ids: set[str] = set()
     if progression_labels:
         for bar, label in sorted(progression_labels.items()):
             if not (0 < bar <= len(track.measures)):
@@ -1495,6 +1496,7 @@ def write_chords_to_gp(
             else:
                 text = label
             _set_beat_freetext(beat_el, text)
+            prog_beat_ids.add(beat_el.get("id"))
             prog_written += 1
 
     # 第一遍：先决定哪些窗口真的会写入（跳过的不会进和弦库），
@@ -1600,7 +1602,16 @@ def write_chords_to_gp(
                     r["chord"], key_r, r.get("key_mode", "Major"),
                     minor_as_tonic=roman_minor_as_tonic,
                 )
-                if overwrite or beat_el.find("FreeText") is None:
+                # 进行注解已在上面写过 FreeText：--overwrite 时也不能用它
+                # 顶掉刚写好的 P 行（否则循环起点标注会整行消失），
+                # 非进行注解拍才允许覆盖旧文本。
+                if (
+                    beat_el.find("FreeText") is None
+                    or (
+                        overwrite
+                        and beat_el.get("id") not in prog_beat_ids
+                    )
+                ):
                     _set_beat_freetext(beat_el, text)
         rewritten_beat_ids.add(beat_el.get("id"))
         written += 1
