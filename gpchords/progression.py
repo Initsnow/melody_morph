@@ -17,7 +17,12 @@
    family，避免段落级重复把和声级小循环挤掉的反向误伤。
 
 标注粒度：freetext 写在每个**连续运行区**（region）的起点，而不是循环的
-每一遍——Intro 的 2 小节循环重复 4 遍只标一处 ``P1: I-V``，不会刷屏。
+每一遍——Intro 的 2 小节循环重复 4 遍只标一处，不会刷屏。标注内容是
+**该 region 第一遍循环的完整罗马数字**（含品质，如 ``P1: I-IV-V7-vi``）；
+同一 family 的不同 region 各标各的，变体直接在谱面上可见（如 Verse 1 的
+region 标 ``V7``、Verse 2 的 region 标 ``V``），不再被 family 汇总模式
+抹平。quality 对和声分析很重要，所以汇总模式只用于归族/聚类，展示层
+按 region 保留完整品质。
 """
 
 from __future__ import annotations
@@ -40,7 +45,8 @@ class LoopFamily:
     """一组共享同一循环模式的连续运行区。"""
 
     id: str  # P1 / P2 ...
-    pattern: list[str]  # 展示用罗马度数，如 ["I", "IV", "V", "vi"]
+    pattern: list[str]  # family 归族/汇总用度数模式，如 ["I", "IV", "V", "vi"]；
+    # 展示层由 annotate 按 region 生成含品质的完整罗马数字，不直接用它
     period: int  # 循环长度（小节）
     occurrences: list[tuple[int, int]] = field(default_factory=list)  # 1 起闭区间
     copies: int = 0  # 所有运行区的循环遍数总和

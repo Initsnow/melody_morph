@@ -7,7 +7,7 @@ chord_token 的罗马度数提取。
 
 from __future__ import annotations
 
-from gpchords.annotate import CHORD_TEMPLATES
+from gpchords.annotate import CHORD_TEMPLATES, _detect_progressions
 from gpchords.progression import (
     chord_token,
     find_loop_families,
@@ -124,3 +124,34 @@ def test_wildcard_rest_measures():
     """None（无和弦小节）可被弱通配，但纯空小节不构成循环。"""
     seq = [tok("I"), None, tok("I"), None, tok("I"), None, tok("I"), None]
     assert find_loop_families(seq) == []
+
+
+def test_detect_progressions_region_labels():
+    """同一 family 的不同 region 各标自己实际进行的完整罗马数字（含品质）。"""
+    def res(bar, c):
+        return {"bar": bar, "chord": c, "key_root": 0, "key_mode": "Major"}
+
+    C = chord("C", 0, "maj")
+    F = chord("F", 5, "maj")
+    G7 = chord("G7", 7, "7")
+    G = chord("G", 7, "maj")
+    Am = chord("Am", 9, "min")
+    verse1 = (C, F, G7, Am)
+    verse2 = (C, F, G, Am)
+    filler = (chord("Dm", 2, "min"), chord("Em", 4, "min"), F, chord("Dm", 2, "min"))
+    pairs = (
+        list(zip(range(1, 9), verse1 * 2))
+        + list(zip(range(9, 13), filler))
+        + list(zip(range(13, 21), verse2 * 2))
+    )
+    results = [res(bar, c) for bar, c in pairs]
+    families, labels, romans, payload = _detect_progressions(results)
+
+    assert len(families) == 1
+    assert labels[1] == "P1: I-IV-V7-vi"
+    assert labels[13] == "P1: I-IV-V-vi"
+    assert romans[1] == "I"
+    assert payload[0]["regions"] == [
+        {"start": 1, "end": 8, "label": "P1: I-IV-V7-vi"},
+        {"start": 13, "end": 20, "label": "P1: I-IV-V-vi"},
+    ]

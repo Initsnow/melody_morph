@@ -1399,10 +1399,12 @@ def write_chords_to_gp(
     - 同名和弦已存在于轨道和弦库时直接复用，否则新增 Item（含和弦构成与指板图）。
     - 每个分析窗口挂到该窗口的第一个有音符的拍上。
     - 已有手工标注的小节默认跳过（--overwrite 时强制覆盖）。
-    - ``progression_labels``: 小节序号 -> 循环进行注解（如 ``P1: I-IV-V-vi``）。
-      独立于和弦写回：即使该小节已有手工和弦也会写。FreeText 支持多行，
-      进行标注和单拍罗马数字（``progression_romans`` 或拍上已有注解）合并成
-      两行一起显示，互不顶替；因此后续的罗马数字写回会跳过这些拍。
+    - ``progression_labels``: 小节序号 -> 循环进行注解（该 region 第一遍
+      循环的完整罗马数字，如 ``P1: I-IV-V7-vi``；同一 family 的不同 region
+      各标各的变体）。独立于和弦写回：即使该小节已有手工和弦也会写。
+      FreeText 支持多行，进行标注和单拍罗马数字（``progression_romans``
+      或拍上已有注解）合并成两行一起显示，互不顶替；因此后续的罗马数字
+      写回会跳过这些拍。
     - ``roman=True`` 时在同一拍写 <FreeText> 罗马数字注解（如 B 大调下
       Bsus2 -> Isus2），调性取该窗口所在小节的调号；已存在自由文本的拍
       默认保留用户原文，只有 --overwrite 才替换。小调默认按关系大调记
@@ -1742,8 +1744,10 @@ def _detect_progressions(
     """从分析结果构造逐小节 token，检测循环进行并生成标注映射。
 
     返回 (families, {小节序号: 进行标注}, {小节序号: 该拍罗马数字},
-    JSON payload)。进行标注与单拍罗马数字分开存，写回时合并成
-    FreeText 的两行（"P1: I-IV-V-vi" + "Isus2"），互不顶替。
+    JSON payload)。进行标注按 region 生成：每个循环起点标该 region 第一遍
+    循环的完整罗马数字（含品质，如 "P1: I-IV-V7-vi"），同一 family 的
+    不同 region 各标各的变体；与单拍罗马数字分开存，写回时合并成
+    FreeText 的两行（进行标注 + "Isus2"），互不顶替。
     """
     n_bars = max((r["bar"] for r in results), default=0)
     tokens: list[Optional[tuple[str, str]]] = []
@@ -1755,18 +1759,16 @@ def _detect_progressions(
                 break
         tokens.append(tok)
     families = find_loop_families(tokens)
+    bar_romans = _bar_romans(results)
     labels: dict[int, str] = {}
     romans: dict[int, str] = {}
     for f in families:
         for start, _ in f.occurrences:
-            labels.setdefault(start, loop_label(f))
-            if start not in romans:
-                for r in results:
-                    if r["bar"] == start and r["chord"]:
-                        romans[start] = chord_to_roman(
-                            r["chord"], r["key_root"], r["key_mode"]
-                        )
-                        break
+            labels.setdefault(
+                start, _region_label(f.id, bar_romans, start, f.period)
+            )
+            if start not in romans and bar_romans.get(start):
+                romans[start] = bar_romans[start]
     payload = [
         {
             "id": f.id,
@@ -1775,23 +1777,63 @@ def _detect_progressions(
             "occurrences": [list(o) for o in f.occurrences],
             "copies": f.copies,
             "coverage": f.coverage,
+            "regions": [
+                {"start": s, "end": e, "label": labels[s]}
+                for s, e in f.occurrences
+            ],
         }
         for f in families
     ]
     return families, labels, romans, payload
 
 
-def _print_progressions(families: list[LoopFamily]) -> None:
+def _bar_romans(results: list[dict]) -> dict[int, str]:
+    """每小节第一个有和弦窗口的完整罗马数字（含品质），供 region 级标注。"""
+    romans: dict[int, str] = {}
+    for r in results:
+        if r["chord"] and r["bar"] not in romans:
+            romans[r["bar"]] = chord_to_roman(
+                r["chord"], r["key_root"], r["key_mode"]
+            )
+    return romans
+
+
+def _region_label(
+    family_id: str, bar_romans: dict[int, str], start: int, period: int
+) -> str:
+    """region 起点标注：该 region 第一遍循环的完整罗马数字（含品质）。
+
+    例：``P1: I-IV-V7-vi``。同一 family 的每个 region 各标各的第一遍，
+    变体在谱面上直接可见（Verse 1 标 V7 的 region 与 Verse 2 标 V 的
+    region 互不顶替）。region 内后续遍与第一遍有出入时以第一遍为准
+    （region 的检测容差本就允许轻微变体，标注描述的是循环起始处的
+    实际进行）。
+    """
+    parts = [
+        bar_romans[bar]
+        for bar in range(start, start + period)
+        if bar in bar_romans
+    ]
+    if not parts:
+        return family_id
+    return f"{family_id}: {'-'.join(parts)}"
+
+
+def _print_progressions(
+    families: list[LoopFamily], labels: dict[int, str]
+) -> None:
     if not families:
         print("未检测到重复的循环进行。")
         return
-    print("检测到循环进行:")
+    print("检测到循环进行（每处起点标该处实际进行的完整罗马数字）:")
     for f in families:
-        occ = "、".join(f"{s}-{e}" for s, e in f.occurrences)
-        print(
-            f"  {loop_label(f)}  （{f.period} 小节循环"
-            f" × {f.copies} 遍: 第 {occ} 小节）"
-        )
+        for start, end in f.occurrences:
+            copies = (end - start + 1) // f.period
+            label = labels.get(start) or loop_label(f)
+            print(
+                f"  {label}  （{f.period} 小节循环 × {copies} 遍: "
+                f"第 {start}-{end} 小节）"
+            )
 
 
 def _print_debug(results: list[dict], args) -> None:
@@ -1920,7 +1962,7 @@ def run_analysis(args) -> list[dict]:
                 prog_romans,
                 prog_payload,
             ) = _detect_progressions(results)
-            _print_progressions(prog_families)
+            _print_progressions(prog_families, prog_labels)
         _print_debug(results, args)
         print(f"共分析 {len(results)} 个窗口。")
         comparison = []
@@ -1982,7 +2024,7 @@ def run_analysis(args) -> list[dict]:
                 prog_romans,
                 prog_payload,
             ) = _detect_progressions(results)
-            _print_progressions(prog_families)
+            _print_progressions(prog_families, prog_labels)
         _print_debug(results, args)
         print(f"共分析 {len(results)} 个窗口。")
         comparison = []
@@ -2131,7 +2173,9 @@ def main() -> None:
     parser.add_argument(
         "--progressions", action="store_true",
         help="检测循环和弦进行（重复的进行/变体重复），在每次循环起点写"
-        " 两行自由注解（第一行 P1: I-IV-V-vi 式进行、第二行该拍罗马数字）",
+        " 两行自由注解（第一行该处循环实际进行的完整罗马数字、含品质，"
+        "如 P1: I-IV-V7-vi；同一进行不同循环区各标各的变体；"
+        "第二行该拍罗马数字）",
     )
     parser.add_argument("--no-compare", action="store_true", help="不做手工标注对照")
     parser.add_argument("--demo", action="store_true", help="运行算法演示")
