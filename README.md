@@ -47,7 +47,8 @@ uv run python midi_to_ust.py input.mid -o output.ust
 uv run gp-chords "song.gp"
 
 # 额外检测循环和弦进行：在每次循环起点写 P1: I-IV-V-vi 式自由注解
-# （该拍不再写单和弦罗马数字；即使小节已有手工和弦也照写）
+# （FreeText 支持多行：第一行进行标注、第二行该拍单和弦罗马数字，
+# 一起显示不顶替；即使小节已有手工和弦也照写）
 uv run gp-chords "song.gp" --track "Rhythm Guitar" --progressions
 
 # 自动判断调性并写入全部小节 -> <原名>_key.gp（原文件不变）

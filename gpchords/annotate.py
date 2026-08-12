@@ -1390,6 +1390,7 @@ def write_chords_to_gp(
     roman: bool = True,
     roman_minor_as_tonic: bool = False,
     progression_labels: Optional[dict[int, str]] = None,
+    progression_romans: Optional[dict[int, str]] = None,
 ) -> dict:
     """
     把自动识别的和弦写回一个新的 .gp 文件（原文件不被修改）。
@@ -1399,9 +1400,9 @@ def write_chords_to_gp(
     - 每个分析窗口挂到该窗口的第一个有音符的拍上。
     - 已有手工标注的小节默认跳过（--overwrite 时强制覆盖）。
     - ``progression_labels``: 小节序号 -> 循环进行注解（如 ``P1: I-IV-V-vi``）。
-      独立于和弦写回：即使该小节已有手工和弦/自由文本也会写（替换该拍原有
-      FreeText，与"同拍只能有一个 FreeText"的 GP 限制一致）；因此后续的
-      罗马数字写回会跳过这些拍。
+      独立于和弦写回：即使该小节已有手工和弦也会写。FreeText 支持多行，
+      进行标注和单拍罗马数字（``progression_romans`` 或拍上已有注解）合并成
+      两行一起显示，互不顶替；因此后续的罗马数字写回会跳过这些拍。
     - ``roman=True`` 时在同一拍写 <FreeText> 罗马数字注解（如 B 大调下
       Bsus2 -> Isus2），调性取该窗口所在小节的调号；已存在自由文本的拍
       默认保留用户原文，只有 --overwrite 才替换。小调默认按关系大调记
@@ -1474,13 +1475,24 @@ def write_chords_to_gp(
                 new_beat.set("id", new_id)
                 if beats_container is not None:
                     beats_container.append(new_beat)
+                beat_els[new_id] = new_beat  # 后续写回循环按新 id 能找到
                 beats_tokens[pos] = new_id
                 beats_el = voice_el.find("Beats")
                 if beats_el is not None:
                     beats_el.text = " ".join(beats_tokens)
                 beat_el = new_beat
                 cloned += 1
-            _set_beat_freetext(beat_el, label)
+            old_text = (beat_el.findtext("FreeText") or "").strip()
+            roman_line = (
+                progression_romans.get(bar) if progression_romans else None
+            )
+            if old_text and old_text != roman_line:
+                text = f"{label}\n{old_text}"  # 保留用户手写的单拍注解
+            elif roman and roman_line:
+                text = f"{label}\n{roman_line}"
+            else:
+                text = label
+            _set_beat_freetext(beat_el, text)
             prog_written += 1
 
     # 第一遍：先决定哪些窗口真的会写入（跳过的不会进和弦库），
@@ -1568,6 +1580,7 @@ def write_chords_to_gp(
             new_beat.set("id", new_id)
             if beats_container is not None:
                 beats_container.append(new_beat)
+            beat_els[new_id] = new_beat
             beats_tokens[pos] = new_id
             beats_el = voice_el.find("Beats")
             if beats_el is not None:
@@ -1725,10 +1738,12 @@ def _analyze_measures(
 
 def _detect_progressions(
     results: list[dict],
-) -> tuple[list[LoopFamily], dict[int, str], list[dict]]:
+) -> tuple[list[LoopFamily], dict[int, str], dict[int, str], list[dict]]:
     """从分析结果构造逐小节 token，检测循环进行并生成标注映射。
 
-    返回 (families, {小节序号: 标注文本}, JSON payload)。
+    返回 (families, {小节序号: 进行标注}, {小节序号: 该拍罗马数字},
+    JSON payload)。进行标注与单拍罗马数字分开存，写回时合并成
+    FreeText 的两行（"P1: I-IV-V-vi" + "Isus2"），互不顶替。
     """
     n_bars = max((r["bar"] for r in results), default=0)
     tokens: list[Optional[tuple[str, str]]] = []
@@ -1741,9 +1756,17 @@ def _detect_progressions(
         tokens.append(tok)
     families = find_loop_families(tokens)
     labels: dict[int, str] = {}
+    romans: dict[int, str] = {}
     for f in families:
         for start, _ in f.occurrences:
             labels.setdefault(start, loop_label(f))
+            if start not in romans:
+                for r in results:
+                    if r["bar"] == start and r["chord"]:
+                        romans[start] = chord_to_roman(
+                            r["chord"], r["key_root"], r["key_mode"]
+                        )
+                        break
     payload = [
         {
             "id": f.id,
@@ -1755,7 +1778,7 @@ def _detect_progressions(
         }
         for f in families
     ]
-    return families, labels, payload
+    return families, labels, romans, payload
 
 
 def _print_progressions(families: list[LoopFamily]) -> None:
@@ -1804,6 +1827,7 @@ def _write_back(
     write_keys: dict[int, int], merged_results: Optional[list[dict]],
     merged_key_root: Optional[int],
     progression_labels: Optional[dict] = None,
+    progression_romans: Optional[dict] = None,
 ) -> None:
     """写回 .gp：默认分析模式写全部分析轨道，合并模式写第一个分析轨道。"""
     if args.no_write:
@@ -1825,10 +1849,12 @@ def _write_back(
             target_results = reanchor_results(merged_results, target, measures_by_bar)
             key_root = merged_key_root
             labels = progression_labels.get("merged") if progression_labels else None
+            romans = progression_romans.get("merged") if progression_romans else None
         else:
             target_results = track_results[target.id]
             key_root = write_keys[target.id]
             labels = progression_labels.get(target.id) if progression_labels else None
+            romans = progression_romans.get(target.id) if progression_romans else None
         stats = write_chords_to_gp(
             current_input,
             output_path,
@@ -1840,6 +1866,7 @@ def _write_back(
             roman=not args.no_roman,
             roman_minor_as_tonic=args.roman_tonic_minor,
             progression_labels=labels,
+            progression_romans=romans,
         )
         current_input = output_path
         print(
@@ -1885,9 +1912,14 @@ def run_analysis(args) -> list[dict]:
             + " + ".join(f"[{t.id}] {t.name}" for t in tracks)
             + f"  窗口: {args.window}  风格: {args.style}"
         )
-        prog_families = prog_labels = prog_payload = None
+        prog_families = prog_labels = prog_romans = prog_payload = None
         if args.progressions:
-            prog_families, prog_labels, prog_payload = _detect_progressions(results)
+            (
+                prog_families,
+                prog_labels,
+                prog_romans,
+                prog_payload,
+            ) = _detect_progressions(results)
             _print_progressions(prog_families)
         _print_debug(results, args)
         print(f"共分析 {len(results)} 个窗口。")
@@ -1919,6 +1951,9 @@ def run_analysis(args) -> list[dict]:
             progression_labels=(
                 {"merged": prog_labels} if prog_labels is not None else None
             ),
+            progression_romans=(
+                {"merged": prog_romans} if prog_romans is not None else None
+            ),
         )
         return results
 
@@ -1926,6 +1961,7 @@ def run_analysis(args) -> list[dict]:
     track_results: dict[int, list[dict]] = {}
     write_keys: dict[int, int] = {}
     track_prog_labels: dict[int, dict[int, str]] = {}
+    track_prog_romans: dict[int, dict[int, str]] = {}
     payload_tracks: list[dict] = []
     last_results: list[dict] = []
     for track in tracks:
@@ -1938,9 +1974,14 @@ def run_analysis(args) -> list[dict]:
             print("调性模式: 每小节调号（无调号回退全局）")
         results = _analyze_measures(track, keys_by_bar, segmenter, args)
         print(f"轨道: [{track.id}] {track.name}  窗口: {args.window}  风格: {args.style}")
-        prog_families = prog_labels = prog_payload = None
+        prog_families = prog_labels = prog_romans = prog_payload = None
         if args.progressions:
-            prog_families, prog_labels, prog_payload = _detect_progressions(results)
+            (
+                prog_families,
+                prog_labels,
+                prog_romans,
+                prog_payload,
+            ) = _detect_progressions(results)
             _print_progressions(prog_families)
         _print_debug(results, args)
         print(f"共分析 {len(results)} 个窗口。")
@@ -1952,6 +1993,8 @@ def run_analysis(args) -> list[dict]:
         write_keys[track.id] = key_root
         if prog_labels is not None:
             track_prog_labels[track.id] = prog_labels
+        if prog_romans is not None:
+            track_prog_romans[track.id] = prog_romans
         last_results = results
         payload_tracks.append(
             {
@@ -1996,6 +2039,7 @@ def run_analysis(args) -> list[dict]:
         None,
         None,
         progression_labels=track_prog_labels or None,
+        progression_romans=track_prog_romans or None,
     )
     return last_results
 
@@ -2087,7 +2131,7 @@ def main() -> None:
     parser.add_argument(
         "--progressions", action="store_true",
         help="检测循环和弦进行（重复的进行/变体重复），在每次循环起点写"
-        " P1: I-IV-V-vi 式自由注解（该拍不再写单和弦罗马数字）",
+        " 两行自由注解（第一行 P1: I-IV-V-vi 式进行、第二行该拍罗马数字）",
     )
     parser.add_argument("--no-compare", action="store_true", help="不做手工标注对照")
     parser.add_argument("--demo", action="store_true", help="运行算法演示")
