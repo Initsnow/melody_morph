@@ -15,6 +15,8 @@ from gpreader.writer import restore_section_cdata
 from gpchords.sections import (
     Boundary,
     SongFeatures,
+    _aligned_repeat_lengths,
+    _boundary_corroborated,
     build_sections,
     detect_boundaries,
     extract_features,
@@ -270,6 +272,54 @@ def test_key_change_soft_not_forced():
     )
     bounds = detect_boundaries(feat, L=4, gap=4, kthr=0.4)
     assert not any(b.forced for b in bounds)
+
+
+def test_aligned_repeat_lengths():
+    """16 小节段落隔 16 小节重复 -> 第二遍起点有 ≥12 小节对齐重复。"""
+    a = [("I", "maj"), ("V", "dom"), ("vi", "min"), ("IV", "maj")] * 4
+    filler = [("II", "maj"), ("III", "min"), ("VI", "min"), ("VII", "maj")] * 4
+    chords = a + filler + a
+    rl = _aligned_repeat_lengths(chords)
+    assert rl[32] >= 16  # bar 33 与 bar 1 整段对齐
+    assert rl[16] < 12  # filler 起点无远距离重复
+
+
+def test_boundary_corroborated():
+    n = 12
+    base = SongFeatures(
+        chords=[("I", "maj")] * n,
+        density=[0.5] * n,
+    )
+    assert not _boundary_corroborated(base, 7, {}, {})
+    jump = SongFeatures(
+        chords=[("I", "maj")] * n,
+        density=[0.3] * 6 + [0.9] * 6,
+    )
+    assert _boundary_corroborated(jump, 7, {}, {})  # 窗口 step ≥0.4
+
+
+def test_repeat_structure_boundary():
+    """远距离长重复 + 密度跳变佐证 -> 第 33 小节是段落边界。"""
+    a = [("I", "maj"), ("V", "dom"), ("vi", "min"), ("IV", "maj")] * 4
+    filler = [("II", "maj"), ("III", "min"), ("VI", "min"), ("VII", "maj")] * 4
+    chords = a + filler + a
+    n = len(chords)
+    density = [0.4] * 16 + [0.6] * 16 + [0.4] * 16
+    feat = SongFeatures(chords=chords, density=density)
+    bounds = detect_boundaries(feat, L=4, gap=4, kthr=0.4)
+    assert any(abs(b.bar - 33) <= 2 for b in bounds)
+
+
+def test_opening_recap_boundary():
+    """块与歌曲开头对齐相似 ≥0.75 -> 边界（副歌复用 Intro 材料）。"""
+    opening = [("I", "maj"), ("V", "dom"), ("I", "maj"), ("V", "dom")]
+    verse = [("ii", "min"), ("IV", "maj"), ("V", "dom"), ("vi", "min")] * 4
+    recap = [("I", "maj"), ("V", "dom"), ("I", "maj"), ("iii", "min")]
+    chords = opening + verse + recap + [("IV", "maj")] * 4
+    n = len(chords)
+    feat = SongFeatures(chords=chords, density=[0.5] * n)
+    bounds = detect_boundaries(feat, L=4, gap=4, kthr=0.4)
+    assert any(abs(b.bar - 21) <= 2 for b in bounds)
 
 
 def test_build_sections_letters_and_intro():

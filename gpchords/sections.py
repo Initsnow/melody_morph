@@ -6,23 +6,31 @@
 （Letter + Text，格式与《春日影.gp》一致，如 ``A:Part 1``；所有段落都带
 字母，不产生空 Letter）。
 
-方法（多特征 + novelty + 重复起点）：
+方法（多特征 novelty + 结构重复 + 循环切分）：
 
 1. **每小节特征向量**：和弦（罗马度数+品质家族）、鼓指纹（16 分桶）、
    贝斯根音、密度（各轨总音符时长）、人声活动度、人声平均音高（旋律轮廓）、
    轨道活动组合、闷音比例、和声节奏密度（auto 窗口数）、速度；硬信号：
    调号/拍号/速度变化、连续空小节（长休止）。
 2. **边界打分**：每个特征建自相似矩阵 → novelty 曲线（左右块内部相似、
-   跨块不相似），归一化加权求和（密度权 2.0、人声 1.5、其余 1.0）；
-   另加和弦矩阵的**重复起点**曲线——某段与前面某段高度相似也是段落起点
-   （副歌复用 Intro 材料这类"相似切换"novelty 抓不到）。峰选取阈值
-   均值+kσ、最小间距 gap；硬信号直接强制成边界。
-3. **证据标注**：每个候选边界列出触发它的特征（哪个特征在它附近跳变），
-   默认 ``--no-write`` 只打印候选供人工确认。
-4. **段落聚类命名**：段 profile = 和弦序列对齐相似度（0.6 权重）+ 标量
-   特征均值向量相似度（0.4），贪心聚类；重复段共享字母、Text 用
-   ``Part N`` 区分；首段唯一且短 → ``Intro``、末段唯一 → ``Outro``，
-   两者同样带字母。
+   跨块不相似），归一化加权求和（密度权 2.0、人声 1.5、贝斯 0.6——行走
+   贝斯噪声大、其余 1.0）；另加和弦矩阵的**重复起点**曲线——某段与前面
+   某段高度相似也是段落起点（副歌复用 Intro 材料这类"相似切换"novelty
+   抓不到）。峰选取阈值均值+kσ、最小间距 gap、允许尾部截断。
+3. **结构重复规则**：起点向后的块在 ≥16 小节外有 ≥12 小节逐位对齐重复
+   且为"新鲜起点"（上一位置无长重复），再经独立佐证（窗口持续变化或
+   某特征 novelty 局部峰或硬信号）才算段落起点——副歌/主歌重复三遍时
+   每遍起点都能抓到（《転がる岩》17 小节副歌 ×3、《カラカラ》27/176），
+   段内乐句重复和跨段落和声巧合不会误报。另有**开头复现**规则：块与
+   歌曲开头对齐相似 ≥0.75 时是回顾式段落起点（副歌复用 Intro）。
+4. **连续循环切分**：周期 ≥8 小节的循环在每遍起点是候选边界，但必须有
+   独立实锤（远距离重复 ≥8、窗口持续变化 ≥0.7、轨道活动组合变化、硬
+   信号）——"8 小节重复两遍但编曲纹丝不动"不切。
+5. **证据标注**：每个候选边界列出触发它的特征，默认 ``--no-write`` 只
+   打印候选供人工确认。
+6. **段落聚类命名**：段 profile = 和弦序列编辑距离（0.7 权重）+ 标量特征
+   均值向量余弦（0.3），贪心聚类；重复段共享字母、Text 用 ``Part N``
+   区分；首段唯一且短 → ``Intro``、末段唯一 → ``Outro``，都带字母。
 """
 
 from __future__ import annotations
@@ -73,7 +81,7 @@ FEATURE_NAMES = {
 FEATURE_WEIGHTS = {
     "chord": 1.0,
     "drum": 1.0,
-    "bass": 1.0,
+    "bass": 0.6,  # 行走贝斯每小节换根音，逐小节根音 novelty 噪声大，适度降权
     "density": 2.0,
     "vocal_act": 1.5,
     "vocal_pitch": 1.0,
@@ -567,6 +575,28 @@ def detect_boundaries(
     m, sd = _mean_std(combined)
     threshold = m + kthr * sd
     peaks = _peaks(combined, gap, threshold)
+    rep_peaks: set[int] = set()
+
+    # 结构重复：起点向后的块在 ≥16 小节外有 ≥12 小节逐位对齐重复 ->
+    # 段落起点（副歌/主歌重复三遍时每遍起点都能抓到；段内乐句重复距离
+    # 近或长度短，不触发）。这是《転がる岩》39/76/129（17 小节副歌 ×3）
+    # 这类"所有特征变化都很小"的谱唯一的可靠信号。
+    if features.chords:
+        repeat_len = _aligned_repeat_lengths(features.chords)
+        for b in range(gap, len(repeat_len)):
+            # 新鲜起点：本位置有长重复但上一位置没有（新对角线的起点），
+            # 否则只是长重复段落内部的错位对齐（副歌内部 45/47/49 都满足
+            # "向后 60 小节还有 16 小节重复"，只有 43 是真正的段落起点）
+            if (
+                repeat_len[b] >= 12
+                and (b == 0 or repeat_len[b - 1] < 12)
+                # 长重复结构还须有独立佐证：短窗持续变化、某特征 novelty
+                # 出峰、或硬信号——否则只是和声巧合（《カラカラ》55↔156
+                # 跨段落共享进行，55 没有任何其他变化，不是段落起点）
+                and _boundary_corroborated(features, b + 1, curves, thr_map)
+            ):
+                if not any(abs(b - p) <= 1 for p in peaks):
+                    peaks.append(b)
 
     # 定向重复起点：逐位对齐相似度 ≥0.75 的局部峰 + 匹配到的旧块起点是
     # 歌曲开头或已检出边界
@@ -585,7 +615,6 @@ def detect_boundaries(
                     loop_interior.update(range(start + 1, end + 1))
 
     if rep_raw and len(rep_arg) == n:
-        rep_peaks: set[int] = set()
         for b in range(gap, n - 1):
             if rep_raw[b] < 0.75:
                 continue
@@ -608,6 +637,25 @@ def detect_boundaries(
                 peaks.append(b)
                 rep_peaks.add(b)
 
+    # 开头复现：某块与歌曲开头逐位对齐相似 ≥0.75（且不在 Intro 循环内部）
+    # ——"副歌复用 Intro 材料"（《春日影》45）这类回顾式段落起点。块内
+    # 复现的低分 rep 噪声不参与，因此不受低分过滤影响。
+    if "chord" in matrices and features.n > 8:
+        def _open_sim(x: int) -> float:
+            return sum(matrices["chord"][x + i][i] for i in range(4)) / 4.0
+
+        for b in range(gap, features.n - 4):
+            if b + 1 in loop_interior:
+                continue
+            sim = _open_sim(b)
+            if (
+                sim >= 0.75
+                and sim >= _open_sim(b - 1)
+                and sim >= _open_sim(b + 1)
+            ):
+                if not any(abs(b - p) <= 1 for p in peaks):
+                    peaks.append(b)
+
     # 连续重复循环：周期 ≥ split_period 的循环在每遍起点切分，**但必须有
     # 独立实锤**——轨道集合变化、鼓型变化（逐小节或按循环两半聚合比较）、
     # 密度/人声/闷音/和声密度变化、硬信号。光"8 小节重复了两遍"不切：
@@ -627,7 +675,7 @@ def detect_boundaries(
                     if any(abs(idx - p) <= 1 for p in peaks):
                         continue
                     if _copy_boundary_corroborated(
-                        features, f, start, end, k, bar
+                        features, f, start, end, k, bar, repeat_len
                     ):
                         peaks.append(idx)
 
@@ -636,12 +684,14 @@ def detect_boundaries(
             peaks.append(idx)
     peaks = sorted(set(peaks))
     # 重复起点独证的候选边界需要足够分数才保留（循环多的歌里"某块和前面
-    # 某块相似"遍地都是，低分 rep 峰大多是噪声；如《春日影》中段的
-    # 46/56/80/84/90/93 分数 1.3-2.6，而《无论如何》Bridge 2 的 103 有 3.1）
+    # 某块相似"遍地都是，低分 rep 峰大多是噪声；如《カラカラ》/《転がる岩》
+    # 去掉过滤后刷到 40+ 个）。开头复现/结构重复/循环切分/硬信号不受影响。
     peaks = [
         b
         for b in peaks
-        if b not in rep_peaks or combined[b] >= 3.0
+        if b not in rep_peaks
+        or combined[b] >= 3.0
+        or _window_step(features, b + 1) >= 0.7
     ]
 
     out: list[Boundary] = []
@@ -723,10 +773,20 @@ def _copy_boundary_corroborated(
     end: int,
     copy_idx: int,
     bar: int,
+    repeat_len: Optional[list[int]] = None,
 ) -> bool:
-    """循环第 copy_idx+1 遍的起点 bar 是否有独立变化实锤。"""
+    """循环第 copy_idx+1 遍的起点 bar 是否有独立变化实锤。
+
+    收紧后的规则：远距离重复 ≥8 小节、短窗持续变化 ≥0.7、轨道活动组合
+    变化、硬信号。单看"鼓型变了"不够——鼓花在段内到处都是（《カラカラ》
+    19 小节鼓 Jaccard 0.0 但仍是 Verse 1 内部）。
+    """
     idx = bar - 1
     if bar in features.hard_events:
+        return True
+    if repeat_len is not None and 0 <= idx < len(repeat_len) and repeat_len[idx] >= 8:
+        return True
+    if _window_step(features, bar) >= 0.7:
         return True
     # 轨道活动组合变化（如《无论如何》25 小节 Lead Guitar 加入）
     if (
@@ -734,45 +794,112 @@ def _copy_boundary_corroborated(
         and features.track_act[idx] != features.track_act[idx - 1]
     ):
         return True
-    # 鼓：逐小节指纹跳变，或按循环两半聚合比较（鼓手每小节微变，聚合
-    # 比较才能看出"这半和上半的 groove 不同"，如《无论如何》66 小节）
-    if features.drums is not None:
-        if _jaccard(features.drums[idx - 1], features.drums[idx]) <= 0.6:
-            return True
-        period = family.period
-        if _jaccard(
-            set().union(*features.drums[start - 1 : start - 1 + period]),
-            set().union(*features.drums[bar - 1 : bar - 1 + period]),
-        ) <= 0.6:
-            return True
-    # 密度（编曲厚度）跳变
-    if (
-        features.density
-        and abs(features.density[idx] - features.density[idx - 1]) >= 0.15
-    ):
-        return True
-    # 人声活动 / 人声旋律
-    if (
-        features.vocal_act is not None
-        and abs(features.vocal_act[idx] - features.vocal_act[idx - 1]) >= 1.0
-    ):
-        return True
-    if features.vocal_pitch is not None:
-        va, vb = features.vocal_pitch[idx - 1], features.vocal_pitch[idx]
-        if va is not None and vb is not None and abs(va - vb) >= 4.0:
-            return True
-    # 闷音比例 / 和声节奏密度
-    if (
-        features.palm
-        and abs(features.palm[idx] - features.palm[idx - 1]) >= 0.2
-    ):
-        return True
-    if (
-        features.harm_rhythm
-        and features.harm_rhythm[idx] != features.harm_rhythm[idx - 1]
-    ):
-        return True
     return False
+
+
+def _window_step(features: SongFeatures, bar: int, w: int = 2) -> float:
+    """短窗持续变化：前 w 小节聚合 vs 后 w 小节聚合，各特征取最大变化。"""
+    i = bar - 1
+    lo, hi = i - w, i + w
+    if lo < 0 or hi > features.n:
+        return 0.0
+    scores: list[float] = []
+    if features.drums is not None:
+        a = set().union(*features.drums[lo:i])
+        c = set().union(*features.drums[i:hi])
+        scores.append(1.0 - _jaccard(a, c))
+    if features.track_act:
+        a = frozenset().union(*features.track_act[lo:i])
+        c = frozenset().union(*features.track_act[i:hi])
+        scores.append(0.0 if a == c else 1.0)
+    if features.density:
+        scores.append(
+            abs(sum(features.density[i:hi]) - sum(features.density[lo:i])) / w
+        )
+    if features.vocal_act is not None:
+        mx = max(features.vocal_act) or 1.0
+        scores.append(
+            abs(sum(features.vocal_act[i:hi]) - sum(features.vocal_act[lo:i]))
+            / (w * mx)
+        )
+    if features.vocal_pitch is not None:
+        a = [x for x in features.vocal_pitch[lo:i] if x is not None]
+        c = [x for x in features.vocal_pitch[i:hi] if x is not None]
+        if a and c:
+            scores.append(
+                min(abs(sum(c) / len(c) - sum(a) / len(a)) / 12.0, 1.0)
+            )
+    if features.harm_rhythm:
+        scores.append(
+            min(
+                abs(sum(features.harm_rhythm[i:hi]) - sum(features.harm_rhythm[lo:i]))
+                / (w * 2),
+                1.0,
+            )
+        )
+    if features.palm:
+        scores.append(
+            abs(sum(features.palm[i:hi]) - sum(features.palm[lo:i])) / w
+        )
+    return max(scores) if scores else 0.0
+
+
+def _boundary_corroborated(
+    features: SongFeatures,
+    bar: int,
+    curves: dict[str, list[float]],
+    thr_map: dict[str, float],
+) -> bool:
+    """边界位置的独立佐证：窗口 step ≥0.4、任一特征 novelty 局部峰、或硬信号。
+
+    novelty 必须在该位置是局部极大（仅过 mean+0.5σ 太松，循环多的歌里
+    几乎每处都有某个特征贴着阈值）。
+    """
+    if bar in features.hard_events:
+        return True
+    if _window_step(features, bar) >= 0.4:
+        return True
+    idx = bar - 1
+    for name, c in curves.items():
+        if name == "_rep":
+            continue
+        if idx >= len(c):
+            continue
+        lo = max(idx - 1, 0)
+        hi = min(idx + 1, len(c) - 1)
+        if (
+            c[idx] >= thr_map.get(name, 0.0)
+            and c[idx] >= c[lo]
+            and c[idx] >= c[hi]
+        ):
+            return True
+    return False
+
+
+def _aligned_repeat_lengths(
+    chords: list[Optional[tuple[str, str]]], min_dist: int = 16
+) -> list[int]:
+    """每个起点向后的最长逐位对齐重复长度（度数一致，距离 ≥ min_dist 小节）。"""
+    n = len(chords)
+    run = [[0] * n for _ in range(n)]
+    for b in range(n - 1, -1, -1):
+        for e in range(n - 1, -1, -1):
+            if (
+                b != e
+                and chords[b] is not None
+                and chords[e] is not None
+                and chords[b][0] == chords[e][0]
+            ):
+                run[b][e] = (
+                    run[b + 1][e + 1] if b + 1 < n and e + 1 < n else 0
+                ) + 1
+    best = [0] * n
+    for b in range(n):
+        best[b] = max(
+            (run[b][e] for e in range(n) if abs(e - b) >= min_dist),
+            default=0,
+        )
+    return best
 
 
 def _evidence_at(
