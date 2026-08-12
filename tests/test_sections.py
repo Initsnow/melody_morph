@@ -14,9 +14,11 @@ from gpreader import parse_gp
 from gpreader.writer import restore_section_cdata
 from gpchords.sections import (
     Boundary,
+    Section,
     SongFeatures,
     _aligned_repeat_lengths,
     _boundary_corroborated,
+    assign_semantic_roles,
     build_sections,
     detect_boundaries,
     extract_features,
@@ -320,6 +322,37 @@ def test_opening_recap_boundary():
     feat = SongFeatures(chords=chords, density=[0.5] * n)
     bounds = detect_boundaries(feat, L=4, gap=4, kthr=0.4)
     assert any(abs(b.bar - 21) <= 2 for b in bounds)
+
+
+def test_assign_semantic_roles():
+    """反复出现且总长度最长的有人声段 -> Chorus；器乐短段 -> Interlude；
+    Intro/Outro 文本保留。"""
+    n = 48
+    vocal_act = [0.0] * n
+    for i in range(8, 24):
+        vocal_act[i] = 3.0
+    for i in range(32, 46):
+        vocal_act[i] = 3.0
+    feat = SongFeatures(
+        chords=[("I", "maj")] * n,
+        density=[0.5] * n,
+        vocal_act=vocal_act,
+    )
+    secs = [
+        Section(start_bar=1, end_bar=8, letter="A", text="Intro"),
+        Section(start_bar=9, end_bar=24, letter="B", text="Part 1"),
+        Section(start_bar=25, end_bar=31, letter="C", text="Part 1"),
+        Section(start_bar=32, end_bar=46, letter="B", text="Part 2"),
+        Section(start_bar=47, end_bar=48, letter="D", text="Part 1"),
+    ]
+    assign_semantic_roles(secs, feat)
+    assert [s.name for s in secs] == [
+        "A:Intro",
+        "B:Chorus 1",
+        "C:Interlude 1",
+        "B:Chorus 2",
+        "D:Interlude 1",
+    ]
 
 
 def test_build_sections_letters_and_intro():

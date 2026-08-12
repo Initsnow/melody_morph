@@ -1116,6 +1116,92 @@ def build_sections(
     return sections
 
 
+def assign_semantic_roles(
+    sections: list[Section], features: SongFeatures
+) -> list[Section]:
+    """按启发式给段落家族分配语义角色（Verse/Chorus/Pre-Chorus/Bridge/Solo…）。
+
+    判断依据（都是猜，不保证与转谱人一致）：
+    - 反复出现 + 有人声 + 总长度最长 -> Chorus（2 小节的高密度碎片不算）；
+    - 反复出现 + 有人声 + 密度较低 -> Verse；
+    - 有人声的段紧邻 Chorus 起点之前 -> Pre-Chorus；
+    - 纯器乐：较长 -> Solo，较短 -> Interlude；
+    - 其余有人声的段 -> Bridge；
+    - Intro/Outro 保持原判断，不参与。
+    """
+    from collections import defaultdict
+
+    families: dict[str, list[Section]] = defaultdict(list)
+    for sec in sections:
+        families[sec.letter].append(sec)
+
+    def mean(vals: list[float]) -> float:
+        return sum(vals) / len(vals) if vals else 0.0
+
+    stats: dict[str, dict] = {}
+    for letter, secs in families.items():
+        bars = [b for s in secs for b in range(s.start_bar, s.end_bar + 1)]
+        density = mean([features.density[b - 1] for b in bars]) if features.density else 0.0
+        vocal = (
+            mean([features.vocal_act[b - 1] for b in bars])
+            if features.vocal_act is not None
+            else 0.0
+        )
+        stats[letter] = {
+            "count": len(secs),
+            "length": sum(s.length for s in secs),
+            "density": density,
+            "vocal": vocal,
+            "instrumental": features.vocal_act is None or vocal < 0.3,
+            "sections": secs,
+        }
+
+    roles: dict[str, str] = {}
+    vocal_repeated = [
+        letter
+        for letter, st in stats.items()
+        if st["count"] >= 2 and not st["instrumental"]
+    ]
+    if vocal_repeated:
+        chorus = max(vocal_repeated, key=lambda l: stats[l]["length"])
+        roles[chorus] = "Chorus"
+
+    # 器乐段先定 Solo / Interlude，避免被 Pre-Chorus/Chorus 误伤
+    for letter, st in stats.items():
+        if st["instrumental"]:
+            roles[letter] = "Solo" if st["length"] >= 16 else "Interlude"
+
+    chorus_starts = {
+        s.start_bar
+        for letter, role in roles.items()
+        if role == "Chorus"
+        for s in stats[letter]["sections"]
+    }
+    for letter, st in stats.items():
+        if letter in roles or st["instrumental"]:
+            continue
+        if any(s.end_bar + 1 in chorus_starts for s in st["sections"]):
+            roles[letter] = "Pre-Chorus"
+
+    for letter, st in stats.items():
+        if letter in roles:
+            continue
+        if st["count"] >= 2 and not st["instrumental"]:
+            roles[letter] = "Verse"
+    for letter in list(stats):
+        if letter not in roles:
+            roles[letter] = "Bridge"
+
+    seq: dict[str, int] = {}
+    for sec in sections:
+        if sec.text in ("Intro", "Outro"):
+            continue
+        role = roles.get(sec.letter, "Part")
+        seq[sec.letter] = seq.get(sec.letter, 0) + 1
+        sec.text = f"{role} {seq[sec.letter]}"
+    return sections
+
+
 # ---------------------------------------------------------------------------
 # 写回 <Section>
 # ---------------------------------------------------------------------------
@@ -1219,6 +1305,8 @@ def run(args) -> dict:
         min_bars=args.min_bars,
         similarity=args.similarity,
     )
+    if args.naming == "semantic":
+        assign_semantic_roles(sections, features)
     for override in args.name or []:
         letter, _, text = override.partition("=")
         for sec in sections:
@@ -1329,6 +1417,11 @@ def main() -> None:
     parser.add_argument(
         "--name", action="append", default=None, metavar="A=Verse 1",
         help="覆盖某字母的段落文本，可重复",
+    )
+    parser.add_argument(
+        "--naming", choices=["neutral", "semantic"], default="semantic",
+        help="semantic=按启发式命名 Verse/Chorus/Pre-Chorus/Solo 等"
+        "（不保证与转谱人一致）；neutral=中性 Part N",
     )
     parser.add_argument(
         "--write", metavar="OUT.gp", help="输出路径（默认 <原名>_sections.gp）"
