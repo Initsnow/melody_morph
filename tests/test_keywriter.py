@@ -274,6 +274,51 @@ def test_sharp_key_respells_flat_notes(tmp_path):
     assert keys_of(out) == ["G"]
 
 
+def test_natural_key_preserves_flat_spelling(tmp_path):
+    # C 大调没有调号，也没有“必须用升号”的惯例；Bb 应保持 Bb，而不是
+    # 被错误地改写成 A#。
+    gpif = GPIF_NOTE_SPELLED.replace(
+        "<Step>A</Step><Accidental>#</Accidental>",
+        "<Step>B</Step><Accidental>b</Accidental>",
+    )
+    gp = make_gp(tmp_path, gpif)
+    out = tmp_path / "out.gp"
+    stats = write_keys_to_gp(gp, out, {}, default_key=(0, "Major"))
+    assert stats["respell"] == 0
+    assert _spelling(out, "ConcertPitch") == "Bb4"
+    assert _spelling(out, "TransposedPitch") == "Bb5"
+    assert keys_of(out) == ["C"]
+
+
+def test_shared_note_respelled_once(tmp_path):
+    gpif = """<GPIF>
+<GPVersion>8.0</GPVersion>
+<Tracks><Track id="0"><Name>L</Name><Staves><Staff><Properties>
+<Property name="Tuning"><Pitches>40 45 50 55 59 64</Pitches></Property>
+</Properties></Staff></Staves></Track></Tracks>
+<MasterBars>
+<MasterBar><Time>4/4</Time><Bars>0</Bars></MasterBar>
+<MasterBar><Time>4/4</Time><Bars>0</Bars></MasterBar>
+</MasterBars>
+<Bars><Bar id="0"><Voices>0</Voices></Bar></Bars>
+<Voices><Voice id="0"><Beats>0</Beats></Voice></Voices>
+<Beats><Beat id="0"><Notes>0</Notes><Rhythm><ref>0</ref></Rhythm></Beat></Beats>
+<Notes><Note id="0"><Properties>
+<Property name="ConcertPitch"><Pitch><Step>B</Step><Accidental>b</Accidental><Octave>4</Octave></Pitch></Property>
+<Property name="Midi"><Number>58</Number></Property>
+<Property name="TransposedPitch"><Pitch><Step>B</Step><Accidental>b</Accidental><Octave>5</Octave></Pitch></Property>
+</Properties></Note></Notes>
+<Rhythms><Rhythm id="0"><NoteValue>Quarter</NoteValue></Rhythm></Rhythms>
+</GPIF>"""
+    gp = make_gp(tmp_path, gpif)
+    out = tmp_path / "out.gp"
+    stats = write_keys_to_gp(gp, out, {}, default_key=(7, "Major"))
+    # 同一个 note 被两个 MasterBar 引用，只应处理一次；Concert/Transposed 各改一次。
+    assert stats["respell"] == 2
+    assert _spelling(out, "ConcertPitch") == "A#4"
+    assert keys_of(out) == ["G", "G"]
+
+
 @pytest.mark.skipif(not SAMPLE_FILE.exists(), reason="样例文件不存在")
 def test_write_keys_to_real_gp(tmp_path):
     out = tmp_path / "keyed.gp"

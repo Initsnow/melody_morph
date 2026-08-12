@@ -31,6 +31,7 @@ import argparse
 import json
 import sys
 import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 from typing import Optional
 
@@ -138,8 +139,17 @@ _FLAT_TO_SHARP = {v: k for k, v in _SHARP_TO_FLAT.items()}
 
 
 def _respell_note(note_el: ET.Element, accidental_count: int) -> int:
-    """把音符的 ConcertPitch/TransposedPitch 拼写重排到调号惯例，返回改动数。"""
-    mapping = _SHARP_TO_FLAT if accidental_count < 0 else _FLAT_TO_SHARP
+    """把音符的 ConcertPitch/TransposedPitch 拼写重排到调号惯例，返回改动数。
+
+    正调号按升号调拼写，负调号按降号调拼写；自然调（0）没有统一惯例，
+    保留文件原有拼写，避免把 C 大调里的 Bb 强行改成 A#。
+    """
+    if accidental_count > 0:
+        mapping = _FLAT_TO_SHARP
+    elif accidental_count < 0:
+        mapping = _SHARP_TO_FLAT
+    else:
+        return 0
     props = note_el.find("Properties")
     if props is None:
         return 0
@@ -220,14 +230,26 @@ def write_keys_to_gp(
             written += 1
         else:
             skipped += 1  # 值相同也算未写
+
+    # 音符可能被多个小节/声部共享（riff/repeat 结构）。先汇总每个音符所
+    # 在小节的调号符号，按唯一音符处理一次；若同一音符跨自然调与升降号调、
+    # 或跨升降号方向，则不重排，避免反复改写或冲突。
+    note_signs: dict[str, set[int]] = {}
     for i, key in touched:
         count, _ = key_signature(*key)
+        sign = (count > 0) - (count < 0)
         mb = master_bars[i - 1]
         for bid in (mb.findtext("Bars") or "").split():
             for nid in bar_note_ids.get(bid, []):
-                note_el = notes.get(nid)
-                if note_el is not None:
-                    respell += _respell_note(note_el, count)
+                note_signs.setdefault(nid, set()).add(sign)
+
+    for nid, signs in note_signs.items():
+        note_el = notes.get(nid)
+        if note_el is None:
+            continue
+        if signs != {1} and signs != {-1}:
+            continue
+        respell += _respell_note(note_el, next(iter(signs)))
     write_gpif(input_path, output_path, root)
 
     # 用解析器自检：每个目标的调号应被读回
@@ -391,6 +413,9 @@ def main() -> None:
         sys.exit(1)
     except ValueError as e:
         print(f"参数错误: {e}", file=sys.stderr)
+        sys.exit(1)
+    except (ET.ParseError, zipfile.BadZipFile) as e:
+        print(f"文件处理失败: {e}", file=sys.stderr)
         sys.exit(1)
 
 

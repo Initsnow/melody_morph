@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import sys
+import zipfile
+import xml.etree.ElementTree as ET
 
 from gpreader import GPTrack, GuitarProError, parse_gp, select_track
 
@@ -89,6 +91,9 @@ def main() -> None:
         song = parse_gp(args.file)
     except GuitarProError as e:
         print(f"解析失败: {e}", file=sys.stderr)
+        sys.exit(1)
+    except (ValueError, ET.ParseError, zipfile.BadZipFile) as e:
+        print(f"文件处理失败: {e}", file=sys.stderr)
         sys.exit(1)
 
     print_summary(song)

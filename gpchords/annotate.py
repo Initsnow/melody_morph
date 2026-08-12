@@ -64,6 +64,7 @@ import json
 import re
 import sys
 import xml.etree.ElementTree as ET
+import zipfile
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -87,6 +88,13 @@ from gpchords.progression import (
     loop_label,
 )
 from gpchords.roman import chord_to_roman
+from gpchords.theory import (
+    FLAT_KEYS as _FLAT_KEYS,
+    FLAT_NAMES as _FLAT_NAMES,
+    SHARP_NAMES as _SHARP_NAMES,
+    parse_key_name,
+    pc_name,
+)
 
 # ---------------------------------------------------------------------------
 # 音乐理论基础
@@ -166,32 +174,9 @@ CHORD_TEMPLATES: dict[str, tuple[tuple[int, ...], str]] = {
     "maj13": ((0, 2, 4, 5, 7, 9, 11), "maj13"),
 }
 
-_SHARP_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-_FLAT_NAMES = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"]
-_FLAT_KEYS = {5, 10, 3, 8, 1, 6}  # F Bb Eb Ab Db Gb 用降号；B 大调（11）按标准用升号
-
 # Krumhansl-Kessler 键感轮廓
 KRUMHANSL_MAJOR = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
 KRUMHANSL_MINOR = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
-
-
-def pc_name(pc: int, key_root: Optional[int] = None) -> str:
-    """音级 -> 音名（按调性选择升/降号记法）。"""
-    names = _FLAT_NAMES if key_root in _FLAT_KEYS else _SHARP_NAMES
-    return names[pc % 12]
-
-
-def parse_key_name(text: str) -> tuple[int, str]:
-    """解析调名（C / Am / F#m / Bb ...）-> (根音音级, Major|Minor)。"""
-    s = text.strip()
-    if not s:
-        raise ValueError("空调名")
-    minor = s.endswith("m") and not s.endswith("maj")
-    core = s[:-1] if minor else s
-    for names in (_SHARP_NAMES, _FLAT_NAMES):
-        if core in names:
-            return names.index(core), ("Minor" if minor else "Major")
-    raise ValueError(f"无法解析调名: {text!r}")
 
 
 def estimate_key(weights: dict[int, float]) -> tuple[int, str]:
@@ -364,9 +349,14 @@ def detect_chord(
     notes = [n for n in notes if not n.muted]
     if not notes:
         return None
+    sounding = [n for n in notes if n.duration_quarters > 0]
+    if not sounding:
+        return None
     raw = note_weights(notes)
     weights = dict(raw)
-    bass_pc = min(n.midi for n in notes) % 12
+    # 装饰音/GP 里的零时值引用音符不参与低音判定：它们没有实际发声时长，
+    # 否则会把一个低音装饰音当成斜杠和弦的根音。
+    bass_pc = min(n.midi for n in sounding) % 12
     if bass_pc in weights:
         weights[bass_pc] *= BASS_WEIGHT_MULTIPLIER
     total = sum(weights.values())
@@ -1425,12 +1415,24 @@ def write_chords_to_gp(
     coll_el = working_el = None
     if staff_props is not None:
         for prop in list(staff_props):
-            if prop.get("name") == "DiagramCollection":
+            if prop.get("name") in ("DiagramCollection", "ChordCollection"):
                 coll_el = prop.find("Items")
             elif prop.get("name") == "DiagramWorkingSet":
                 working_el = prop.find("Items")
+            if coll_el is not None and working_el is not None:
+                break
     if coll_el is None:
-        raise GuitarProError(f"轨道 {track.name} 没有 DiagramCollection，无法写入和弦")
+        # 兼容只带 ChordCollection 的 GPIF 变体；如果属性存在但缺 Items，
+        # 就地补一个空 Items，而不是直接拒绝写回。
+        if staff_props is not None:
+            for prop in list(staff_props):
+                if prop.get("name") in ("DiagramCollection", "ChordCollection"):
+                    coll_el = ET.SubElement(prop, "Items")
+                    break
+    if coll_el is None:
+        raise GuitarProError(
+            f"轨道 {track.name} 没有 DiagramCollection/ChordCollection，无法写入和弦"
+        )
 
     # GPIF 的 beat 对象是全局复用的（同一个 riff 拍被几十上百个位置引用），
     # 而带和弦的 beat 从不复用。因此目标拍若被多处引用，必须先克隆一个新的
@@ -1491,7 +1493,26 @@ def write_chords_to_gp(
             roman_line = (
                 progression_romans.get(bar) if progression_romans else None
             )
-            if overwrite:
+            # 非 overwrite 时也识别并替换旧机器 P 行，避免重复跑 --progressions
+            # 把同一个 P 标注再追加一遍；用户手写文本仍保留。
+            if not overwrite and old_text:
+                lines = [ln.strip() for ln in old_text.splitlines() if ln.strip()]
+                replaced = False
+                for i, line in enumerate(lines):
+                    if re.match(r"^P\d+:", line):
+                        lines[i] = label
+                        replaced = True
+                if replaced:
+                    if roman and roman_line and lines and lines[0] != roman_line:
+                        lines.insert(0, roman_line)
+                    text = "\n".join(lines)
+                elif old_text != roman_line:
+                    text = f"{old_text}\n{label}"
+                elif roman and roman_line:
+                    text = f"{roman_line}\n{label}"
+                else:
+                    text = label
+            elif overwrite:
                 # --overwrite：整体替换旧注解（包括上次运行遗留的旧 P 行），
                 # 不再把旧文本叠在新标注下面。单拍罗马数字在上、进行在下。
                 text = (
@@ -1499,9 +1520,6 @@ def write_chords_to_gp(
                     if roman and roman_line
                     else label
                 )
-            elif old_text and old_text != roman_line:
-                # 保留用户手写的单拍注解，进行标注追加在其下
-                text = f"{old_text}\n{label}"
             elif roman and roman_line:
                 text = f"{roman_line}\n{label}"
             else:
@@ -2233,6 +2251,9 @@ def main() -> None:
         sys.exit(1)
     except ValueError as e:
         print(f"参数错误: {e}", file=sys.stderr)
+        sys.exit(1)
+    except (ET.ParseError, zipfile.BadZipFile) as e:
+        print(f"文件处理失败: {e}", file=sys.stderr)
         sys.exit(1)
 
 

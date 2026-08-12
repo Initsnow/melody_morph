@@ -28,10 +28,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-# 与 annotate 相同的音名拼写表（避免循环导入，量小故各自维护）
-_SHARP_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-_FLAT_NAMES = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"]
-_FLAT_KEYS = {5, 10, 3, 8, 1, 6}  # F Bb Eb Ab Db Gb 用降号；B 大调（11）用升号
+from gpchords.theory import pc_name as _pc_name
 
 _ROMAN = ("I", "II", "III", "IV", "V", "VI", "VII")
 # C=0, D=1, ..., B=6：字母 -> 音级序数
@@ -65,12 +62,6 @@ _MINOR_QUALITIES = {
     *_DIM_SUFFIX,
     *_HALF_DIM_SUFFIX,
 }
-
-def _pc_name(pc: int, key_root: Optional[int] = None) -> str:
-    """音级 -> 音名（按调性选择升/降号记法，规则同 annotate.pc_name）。"""
-    names = _FLAT_NAMES if key_root in _FLAT_KEYS else _SHARP_NAMES
-    return names[pc % 12]
-
 
 def _accidental(diff: int) -> str:
     """半音差 -> 升降号前缀（最多双升/双降）。"""

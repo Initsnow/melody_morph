@@ -233,6 +233,24 @@ def test_single_note_not_detected(midis):
     assert detect(midis, key_root=0, key_mode="Major") is None
 
 
+def test_zero_duration_grace_note_does_not_affect_bass():
+    # 时值为 0 的装饰音不应被当成低音，否则 C/E/G 会被误写成 C/A。
+    result = detect_chord(
+        [
+            note(45, 0.0),  # A2 装饰音
+            note(48, 1.0),  # C3
+            note(52, 1.0),  # E3
+            note(55, 1.0),  # G3
+        ],
+        key_root=0,
+        key_mode="Major",
+        style="guitar",
+    )
+    assert result is not None
+    assert result["name"] == "C"
+    assert result["bass_pc"] == 0
+
+
 @pytest.mark.parametrize(
     "midis",
     [

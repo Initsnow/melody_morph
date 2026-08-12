@@ -39,6 +39,7 @@ import argparse
 import json
 import sys
 import xml.etree.ElementTree as ET
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -59,6 +60,8 @@ from gpchords.annotate import (
 )
 from gpchords.roman import chord_to_roman
 from gpchords.progression import find_loop_families
+from gpchords.theory import quality_family as _quality_family
+from gpchords.theory import roman_degree as _roman_degree
 
 # ---------------------------------------------------------------------------
 # 每小节特征
@@ -180,33 +183,6 @@ def _detect_melody_track(song: GPSong) -> Optional[GPTrack]:
     return max(candidates, key=_melody_score)
 
 
-def _roman_degree(roman: str) -> str:
-    main = roman.split("/")[0].strip()
-    for i, ch in enumerate(main):
-        if ch in "IViv":
-            j = i + 1
-            while j < len(main) and main[j] in "IViv":
-                j += 1
-            return main[:j]
-    return main
-
-
-def _quality_family(quality: str) -> str:
-    if "dim" in quality or "ø" in quality:
-        return "dim"
-    if "aug" in quality:
-        return "aug"
-    if "sus" in quality:
-        return "sus"
-    if "maj" in quality:
-        return "maj"
-    if "m" in quality:
-        return "min"
-    if "7" in quality:
-        return "dom"
-    return "maj"
-
-
 def _meas_notes(m) -> list:
     return [x for b in m.beats for x in b.notes if not x.muted]
 
@@ -228,6 +204,10 @@ def extract_features(
 ) -> SongFeatures:
     """提取逐小节特征。``vocal_track`` 可为轨道选择器或 "none"/None（自动）。"""
     n = len(track.measures)
+    if any(len(t.measures) < n for t in song.tracks):
+        raise GuitarProError(
+            f"轨道小节数不一致（分析轨道 {track.name} 有 {n} 小节），无法提取特征"
+        )
     if vocal_track == "none":
         vocal_el = None
     elif vocal_track:
@@ -252,7 +232,7 @@ def extract_features(
         (t for t in song.tracks if t.midi_program == 0), None
     )
     drums = (
-        [_drum_fingerprint(m) for m in drum_track.measures]
+        [_drum_fingerprint(m) for m in drum_track.measures[:n]]
         if drum_track is not None
         else None
     )
@@ -263,7 +243,7 @@ def extract_features(
     bass = (
         [
             min((x.midi for x in _meas_notes(m)), default=None)
-            for m in bass_track.measures
+            for m in bass_track.measures[:n]
         ]
         if bass_track is not None
         else None
@@ -287,14 +267,14 @@ def extract_features(
     density = [d / mx for d in density]
 
     vocal_act = (
-        [sum(x.duration_quarters for x in _meas_notes(m)) for m in vocal_el.measures]
+        [sum(x.duration_quarters for x in _meas_notes(m)) for m in vocal_el.measures[:n]]
         if vocal_el is not None
         else None
     )
     vocal_pitch = None
     if vocal_el is not None:
         vocal_pitch = []
-        for m in vocal_el.measures:
+        for m in vocal_el.measures[:n]:
             ns = _meas_notes(m)
             if not ns:
                 vocal_pitch.append(None)
@@ -1451,6 +1431,9 @@ def main() -> None:
         sys.exit(1)
     except ValueError as e:
         print(f"参数错误: {e}", file=sys.stderr)
+        sys.exit(1)
+    except (ET.ParseError, zipfile.BadZipFile) as e:
+        print(f"文件处理失败: {e}", file=sys.stderr)
         sys.exit(1)
 
 

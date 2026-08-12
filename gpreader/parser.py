@@ -275,7 +275,10 @@ def parse_gp(path: str | Path) -> GPSong:
         raise GuitarProError(f"score.gpif XML 解析失败: {e}") from e
     if root.tag != "GPIF":
         raise GuitarProError(f"score.gpif 根元素异常: {root.tag!r}")
-    return _parse_gpif(root, version)
+    try:
+        return _parse_gpif(root, version)
+    except (ValueError, IndexError, KeyError) as e:
+        raise GuitarProError(f"score.gpif 结构异常，无法解析: {e}") from e
 
 
 def _parse_gpif(root: ET.Element, version: str) -> GPSong:

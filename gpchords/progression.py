@@ -48,6 +48,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from gpchords.roman import chord_to_roman
+from gpchords.theory import quality_family as _quality_family
+from gpchords.theory import roman_degree as _roman_degree
 
 # 块链接：相邻两块按罗马度数一致比例至少达到该值才视为同一次循环
 DEFAULT_MIN_RATIO = 0.6
@@ -74,35 +76,6 @@ class LoopFamily:
     occurrences: list[tuple[int, int]] = field(default_factory=list)  # 1 起闭区间
     copies: int = 0  # 所有运行区的循环遍数总和
     coverage: int = 0  # 净覆盖小节数 = Σ(遍数-1)*period
-
-
-def _roman_degree(roman: str) -> str:
-    """罗马数字字符串 -> 度数部分（去掉品质/斜杠）：'Isus2/F#' -> 'I'。"""
-    main = roman.split("/")[0].strip()
-    for i, ch in enumerate(main):
-        if ch in "IV" or ch in "iv":
-            j = i + 1
-            while j < len(main) and main[j] in "IViv":
-                j += 1
-            return main[:j]
-    return main
-
-
-def _quality_family(quality: str) -> str:
-    """模板品质 -> 粗家族（匹配时容忍 Isus2/Iadd9 这类装饰差异）。"""
-    if "dim" in quality or "ø" in quality:
-        return "dim"
-    if "aug" in quality:
-        return "aug"
-    if "sus" in quality:
-        return "sus"
-    if "maj" in quality:
-        return "maj"
-    if "m" in quality:
-        return "min"
-    if "7" in quality:
-        return "dom"
-    return "maj"
 
 
 def chord_token(

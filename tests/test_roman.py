@@ -443,6 +443,72 @@ def test_overwrite_sweeps_orphan_stale_progression_label(tmp_path):
     assert not m2.beats[0].free_text
 
 
+def test_progression_rerun_without_overwrite_does_not_duplicate(tmp_path):
+    gp = tmp_path / "prog_rerun.gp"
+    _mini_gp(gp)
+    song = parse_gp(gp)
+    track = song.tracks[0]
+    beat = track.measures[0].beats[0]
+    results = [_result_for(beat, 1, 0, chord("C", 0, "maj"))]
+
+    out1 = tmp_path / "prog_rerun_1.gp"
+    write_chords_to_gp(
+        str(gp),
+        str(out1),
+        song,
+        track,
+        results,
+        key_root=0,
+        progression_labels={1: "P1: I-IV-V-vi"},
+        progression_romans={1: "I"},
+    )
+
+    song2 = parse_gp(out1)
+    track2 = song2.tracks[0]
+    beat2 = track2.measures[0].beats[0]
+    results2 = [_result_for(beat2, 1, 0, chord("C", 0, "maj"))]
+    out2 = tmp_path / "prog_rerun_2.gp"
+    write_chords_to_gp(
+        str(out1),
+        str(out2),
+        song2,
+        track2,
+        results2,
+        key_root=0,
+        progression_labels={1: "P1: I-IV-V-vi"},
+        progression_romans={1: "I"},
+    )
+
+    verify = parse_gp(out2)
+    ft = verify.tracks[0].measures[0].beats[0].free_text
+    assert ft == "I\nP1: I-IV-V-vi"
+    assert ft.count("\n") == 1
+
+
+def test_write_chords_supports_chord_collection(tmp_path):
+    gp = tmp_path / "chord_collection.gp"
+    _mini_gp(gp)
+    with zipfile.ZipFile(gp) as z:
+        gpif = z.read("Content/score.gpif").decode("utf-8")
+    gpif = gpif.replace(
+        '<Property name="DiagramCollection"><Items /></Property>',
+        '<Property name="ChordCollection"><Items /></Property>',
+    )
+    with zipfile.ZipFile(gp, "w") as z:
+        z.writestr("Content/score.gpif", gpif)
+        z.writestr("VERSION", "8.0")
+
+    song = parse_gp(gp)
+    track = song.tracks[0]
+    beat = track.measures[0].beats[0]
+    results = [_result_for(beat, 1, 0, chord("C", 0, "maj"))]
+    out = tmp_path / "chord_collection_out.gp"
+    stats = write_chords_to_gp(str(gp), str(out), song, track, results, key_root=0)
+    assert stats["written"] == 1
+    verify = parse_gp(out)
+    assert verify.tracks[0].measures[0].beats[0].chord is not None
+
+
 def test_restore_cdata_wraps_new_freetext():
     from gpreader.writer import restore_cdata
 

@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import sys
 import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 from gpreader import GuitarProError, parse_gp, select_tracks
@@ -108,30 +109,7 @@ def clear_track(root: ET.Element, tid: str) -> dict[str, int]:
     return {"beats": len(beat_ids), "chords": chords, "freetexts": freetexts}
 
 
-def main() -> None:
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
-        except (AttributeError, ValueError):
-            pass
-    parser = argparse.ArgumentParser(
-        description="清除指定轨道的和弦标注与自由文本（原文件不变）",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    parser.add_argument("file", help=".gp / .gpx 文件路径")
-    parser.add_argument(
-        "--track", action="append", default=None, metavar="TRACK",
-        help="清除的轨道（逗号分隔或重复 --track；all=全部非鼓轨道；"
-        "不指定时交互选择）",
-    )
-    parser.add_argument(
-        "--write", nargs="?", const="__default__", default="__default__",
-        metavar="OUT.gp",
-        help="输出路径（默认 <原名>_cleared.gp；--no-write 只统计）",
-    )
-    parser.add_argument("--no-write", action="store_true", help="只统计不清除")
-    args = parser.parse_args()
-
+def _run(args) -> None:
     song = parse_gp(args.file)
     tracks = (
         select_tracks(song, args.track)
@@ -182,6 +160,40 @@ def main() -> None:
                 f"自由文本 {n_ft} 处",
                 file=sys.stderr,
             )
+
+
+def main() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+    parser = argparse.ArgumentParser(
+        description="清除指定轨道的和弦标注与自由文本（原文件不变）",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("file", help=".gp / .gpx 文件路径")
+    parser.add_argument(
+        "--track", action="append", default=None, metavar="TRACK",
+        help="清除的轨道（逗号分隔或重复 --track；all=全部非鼓轨道；"
+        "不指定时交互选择）",
+    )
+    parser.add_argument(
+        "--write", nargs="?", const="__default__", default="__default__",
+        metavar="OUT.gp",
+        help="输出路径（默认 <原名>_cleared.gp；--no-write 只统计）",
+    )
+    parser.add_argument("--no-write", action="store_true", help="只统计不清除")
+    args = parser.parse_args()
+
+    try:
+        _run(args)
+    except GuitarProError as e:
+        print(f"解析失败: {e}", file=sys.stderr)
+        sys.exit(1)
+    except (ValueError, ET.ParseError, zipfile.BadZipFile) as e:
+        print(f"文件处理失败: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

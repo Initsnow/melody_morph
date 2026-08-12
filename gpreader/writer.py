@@ -135,29 +135,38 @@ def write_gpif(
     """
     with zipfile.ZipFile(input_path) as zin:
         infos = zin.infolist()
-        file_data = {i.filename: zin.read(i.filename) for i in infos}
-    gpif_name = (
-        "Content/score.gpif" if "Content/score.gpif" in file_data else "score.gpif"
-    )
-    xml_text = ET.tostring(root, encoding="unicode")
-    xml_text = restore_cdata(
-        xml_text, cdata_pairs_from(file_data[gpif_name].decode("utf-8"))
-    )
-    if extra_fix is not None:
-        xml_text = extra_fix(xml_text)
-    xml_bytes = (
-        '<?xml version="1.0" encoding="utf-8"?>\n'.encode("utf-8")
-        + xml_text.encode("utf-8")
-    )
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as zout:
-        for info in infos:
-            content = xml_bytes if info.filename == gpif_name else file_data[info.filename]
-            new_info = zipfile.ZipInfo(info.filename, date_time=info.date_time)
-            new_info.compress_type = info.compress_type
-            new_info.external_attr = info.external_attr
-            if info.extra:
-                new_info.extra = info.extra
-            zout.writestr(new_info, content)
+        names = set(zin.namelist())
+        gpif_name = "Content/score.gpif" if "Content/score.gpif" in names else "score.gpif"
+        gpif_text = zin.read(gpif_name).decode("utf-8")
+        xml_text = ET.tostring(root, encoding="unicode")
+        xml_text = restore_cdata(xml_text, cdata_pairs_from(gpif_text))
+        if extra_fix is not None:
+            xml_text = extra_fix(xml_text)
+        xml_bytes = (
+            '<?xml version="1.0" encoding="utf-8"?>\n'.encode("utf-8")
+            + xml_text.encode("utf-8")
+        )
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as zout:
+            for info in infos:
+                # 只读当前条目，避免把整个 zip 解压到内存。
+                content = (
+                    xml_bytes
+                    if info.filename == gpif_name
+                    else zin.read(info.filename)
+                )
+                new_info = zipfile.ZipInfo(info.filename, date_time=info.date_time)
+                new_info.compress_type = info.compress_type
+                new_info.external_attr = info.external_attr
+                new_info.internal_attr = info.internal_attr
+                new_info.comment = info.comment
+                new_info.create_system = info.create_system
+                new_info.create_version = info.create_version
+                new_info.extract_version = info.extract_version
+                new_info.reserved = info.reserved
+                new_info.flag_bits = info.flag_bits
+                if info.extra:
+                    new_info.extra = info.extra
+                zout.writestr(new_info, content)
     with open(output_path, "wb") as f:
         f.write(buffer.getvalue())

@@ -10,7 +10,9 @@ from __future__ import annotations
 import zipfile
 from pathlib import Path
 
-from gpreader import parse_gp
+import pytest
+
+from gpreader import GPSong, GPMeasure, GPTrack, GuitarProError, parse_gp
 from gpreader.writer import restore_section_cdata
 from gpchords.sections import (
     Boundary,
@@ -117,6 +119,28 @@ def test_restore_section_cdata_ignores_lyrics_text():
     out = restore_section_cdata(xml)
     assert "<Text>words</Text>" in out  # 歌词不被触碰
     assert "<Text><![CDATA[Part 1]]></Text>" in out
+
+
+def test_extract_features_rejects_mismatched_track_lengths():
+    """导入/损坏文件中各轨小节数不一致时，给出明确错误而不是 IndexError。"""
+    long_track = GPTrack(
+        id=0,
+        name="A",
+        measures=[GPMeasure(index=1), GPMeasure(index=2)],
+    )
+    short_track = GPTrack(
+        id=1,
+        name="B",
+        measures=[GPMeasure(index=1)],
+    )
+    song = GPSong(tracks=[long_track, short_track])
+    with pytest.raises(GuitarProError):
+        extract_features(
+            song,
+            long_track,
+            {1: (0, "Major"), 2: (0, "Major")},
+            vocal_track="none",
+        )
 
 
 def test_write_sections_round_trip(tmp_path):
