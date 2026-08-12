@@ -201,3 +201,47 @@ def test_per_occurrence_conflict_keeps_intro_region():
     by_period = {f.period: f for f in fams}
     assert by_period[2].occurrences == [(1, 8)]
     assert by_period[6].occurrences == [(13, 78)]
+
+
+def test_variant_16bar_phrase_not_clumped():
+    """两个 8 小节变体句链成 16 小节时，选族保留 8 小节循环，
+    不再聚成一坨 16 小节模式（--progressions 标注可读性回归）。"""
+    verse = (
+        [tok("I"), tok("I"), tok("V"), tok("V"), tok("vi"), tok("vi"), tok("IV"), tok("IV")]
+        + [tok("I"), tok("I"), tok("V"), tok("V"), tok("VI"), tok("vi"), tok("IV"), tok("IV")]
+        + [tok("I"), tok("I"), tok("V"), tok("V"), tok("vi"), tok("vi"), tok("IV"), tok("iv")]
+        + [tok("I"), tok("I"), tok("V"), tok("V"), tok("VI"), tok("VI"), tok("IV"), tok("IV")]
+    )
+    transition = [tok("VI"), tok("IV"), tok("I"), tok("V")] * 2
+    chorus = [tok("I"), tok("I"), tok("V"), tok("V"), tok("VI"), tok("VI"), tok("IV"), tok("IV")] * 7
+    seq = [tok("I"), tok("I")] + verse + transition + [tok("V"), tok("V")] + chorus
+    fams = find_loop_families(seq)
+    by_period: dict[int, list] = {}
+    for f in fams:
+        by_period.setdefault(f.period, []).append(f)
+    assert 16 not in by_period  # 变体句不再合并成 16 小节
+    assert len(by_period[8]) == 2  # 主歌 + 副歌两个 8 小节 family
+    verse_f, chorus_f = sorted(
+        by_period[8], key=lambda f: min(s for s, _ in f.occurrences)
+    )
+    assert verse_f.occurrences == [(2, 33)]
+    assert chorus_f.occurrences == [(45, 100)]
+    assert fams[0].id == "P1"  # 按出现顺序：主歌是 P1
+
+
+def test_static_patterns_not_reported():
+    """持续音/踏板（模式只有一种度数）不是和弦进行，不报告。"""
+    seq = [tok("V"), tok("V")] * 2 + [tok("I"), tok("I"), tok("I")] * 2
+    assert find_loop_families(seq) == []
+
+
+def test_ids_numbered_by_appearance():
+    """P 编号按首次出现顺序（谱面上先遇到的循环是 P1），不按覆盖量。"""
+    seq = (
+        [tok("I"), tok("V", "dom")] * 4  # 1-8 小循环
+        + [tok("I"), tok("IV"), tok("V"), tok("vi")] * 4  # 9-24 大循环
+    )
+    fams = find_loop_families(seq)
+    assert [f.id for f in fams] == ["P1", "P2"]
+    assert fams[0].period == 2
+    assert fams[1].period == 4

@@ -13,9 +13,10 @@
    和 Verse 2 换掉几个和弦仍算同一循环）。左极大且至少两遍的运行才保留。
 2. **模式聚类**：同一周期的运行按模式 LCS 相似度（默认 0.7）归成
    loop family——分散在曲中各处的同名循环（副歌 1 / 副歌 2）共享一个
-   family。最后按（覆盖小节数多优先，同覆盖取周期短）贪心去掉互相重叠的
-   family，避免段落级重复把和声级小循环挤掉的反向误伤。冲突按 occurrence
-   逐区让位：只丢与已选 family 撞车的区，不误杀整个 family 的其他区。
+   family。**逐轮选择**：每轮取覆盖最大的 family，选中后把它占用的区从
+   其余 family 移除并重算覆盖——长周期 family 不能靠"之后会被丢弃的区"
+   虚增覆盖抢先（16 小节变体句不会挤掉更准的 8 小节循环）。P 编号按
+   首次出现顺序，谱面上先遇到的循环是 P1。
 
 两个防错位机制：
 
@@ -23,9 +24,12 @@
   本质是 2 小节循环重复 3 遍），按短周期重新链接。否则同一段和声会被
   长周期平移窗口切走，循环起点跟着偏（如 intro 的 V-I 循环被标成从
   第 3 小节开始的 6 小节窗口）。跨小节休止打断短周期重链时保留原周期。
-- **非原始切片不独占起点**：同一段音乐同时存在短周期与长周期切片时，
-  覆盖计算按保留后的 occurrence 重算，长周期 family 不会因为吞掉别的区
-  而把短周期的正确起点整体挤掉。
+- **同周期去重优先更大窗口**：重叠的运行若 span 更大且质量没有明显更差
+  （差 ≤0.1），用更大窗口替换——大窗口通常从乐段边界起并覆盖变体遍，
+  避免循环起点被"对齐更好"的平移小窗挤到乐段中间。
+
+过滤：纯空小节构成的"循环"和只有一种度数的静态模式（[V,V]、[I,I,I]
+这类持续音/踏板）都不是进行，不报告。
 
 标注粒度：freetext 写在每个**连续运行区**（region）的起点，而不是循环的
 每一遍——Intro 的 2 小节循环重复 4 遍只标一处，不会刷屏。标注内容是
@@ -47,6 +51,12 @@ from gpchords.roman import chord_to_roman
 DEFAULT_MIN_RATIO = 0.6
 # 模式聚类：两个运行的模式 LCS 相似度至少达到该值才归入同一 family
 DEFAULT_PATTERN_SIMILARITY = 0.7
+# 同周期去重：span 更大的运行质量不比已保留的低超过该值时，替换为
+# 更大窗口（通常从乐段边界起、覆盖变体遍），避免只留"对齐最好"的
+# 平移小窗而把循环起点挤到乐段中间。0.1 是实测折中：轨道 1 的 8 小节
+# 循环平移 1 小节只掉 0.06 质量（值得换），轨道 0 副歌区横跨过渡段的
+# 大窗口掉 0.15（不换，保留 q=1.0 的干净窗口）。
+DEDUP_QUALITY_TOLERANCE = 0.1
 # 运行匹配时 None（无和弦小节）视为弱通配：与任何 token 固定给该相似度
 _WILDCARD_SIM = 0.5
 
@@ -177,8 +187,9 @@ def find_loop_families(
 ) -> list[LoopFamily]:
     """从逐小节 token 序列检测循环进行 family。
 
-    返回按（周期短、覆盖多）排序、互不重叠的 loop family；每处 occurrence
-    是一个连续运行区（1 起闭区间），``copies`` 是区内循环遍数。
+    返回互不重叠、按首次出现位置排序的 loop family（P1 是谱面上先遇到的
+    循环）；每处 occurrence 是一个连续运行区（1 起闭区间），``copies``
+    是区内循环遍数。
     """
     n = len(tokens)
     runs: list[tuple[int, int, int, float]] = []  # (period, start0, copies, quality)
@@ -237,26 +248,41 @@ def find_loop_families(
     runs = reduced
 
     # 同一周期内：滑动错位会产生大量互相重叠（≥2 小节）的同款运行，
-    # 只保留质量最高的一条（对齐最好），其余是同一段和声的平移窗口
+    # 默认保留质量最高的一条（对齐最好）；但若另一条的 span 更大且质量
+    # 没有明显更差，用更大窗口替换——大窗口通常从乐段边界起并覆盖变体遍
+    # （如 8 小节循环从第 3 小节起 ×4，而不是从第 4 小节起 ×3），
+    # 避免循环起点被"对齐更好"的平移小窗挤到乐段中间。
     deduped: list[tuple[int, int, int, float]] = []
     for p in sorted({r[0] for r in runs}):
         kept: list[tuple[int, int, int, float]] = []
         for r in sorted(
-            (x for x in runs if x[0] == p), key=lambda x: (-x[3], x[1])
+            (x for x in runs if x[0] == p),
+            key=lambda x: (-x[3], -x[2], x[1]),
         ):
             s0, copies = r[1], r[2]
-            if any(
-                max(
-                    0,
-                    min(s0 + copies * p, k[1] + k[2] * p)
-                    - max(s0 + 1, k[1] + 1)
-                    + 1,
-                )
-                >= 2
-                for k in kept
-            ):
+            conflict = next(
+                (
+                    k
+                    for k in kept
+                    if max(
+                        0,
+                        min(s0 + copies * p, k[1] + k[2] * p)
+                        - max(s0 + 1, k[1] + 1)
+                        + 1,
+                    )
+                    >= 2
+                ),
+                None,
+            )
+            if conflict is None:
+                kept.append(r)
                 continue
-            kept.append(r)
+            if (
+                copies * p > conflict[2] * p
+                and r[3] >= conflict[3] - DEDUP_QUALITY_TOLERANCE
+            ):
+                kept.remove(conflict)
+                kept.append(r)
         deduped.extend(kept)
 
     # 同一周期内按模式相似度聚类（分散的同名循环归一族）
@@ -286,6 +312,9 @@ def find_loop_families(
 
     # 丢弃纯空小节构成"循环"（pattern 里没有真实度数）
     families = [f for f in families if any(d is not None for d in f.pattern)]
+    # 丢弃静态模式：pattern 只有一种度数（如 [V,V]、[I,I,I]）是持续音/
+    # 踏板，不是和弦"进行"，标出来只会刷屏
+    families = [f for f in families if len(set(f.pattern)) >= 2]
     # 去包含：同一 family 内被更长运行区覆盖的区只保留外层
     for f in families:
         kept: list[tuple[int, int]] = []
@@ -296,12 +325,14 @@ def find_loop_families(
                 kept.append(occ)
         f.occurrences = kept
 
-    # 覆盖多优先（真正解释更多音乐的循环留下），同覆盖取周期短。重叠
-    # 冲突按 occurrence 逐区让位：只丢与已选 family 冲突的区，而不是
-    # 整个 family——否则 intro 的 2 小节 V-I 循环会因副歌区与长周期
-    # family 撞车而被整体误杀，起点标注跟着消失。
+    # 逐轮选择：每轮取覆盖最大的 family，选中后把它占用的区从其余
+    # family 里移除并重算覆盖。长周期 family 不能靠"之后会被丢弃的区"
+    # 虚增覆盖抢先——否则 16 小节变体句会挤掉更准的 8 小节循环。
+    pending = list(families)
     selected: list[LoopFamily] = []
-    for f in sorted(families, key=lambda f: (-f.coverage, f.period)):
+    while pending:
+        pending.sort(key=lambda f: (-f.coverage, f.period))
+        f = pending.pop(0)
         kept_occ = [
             o
             for o in f.occurrences
@@ -321,7 +352,25 @@ def find_loop_families(
         if f.coverage < min_coverage:
             continue
         selected.append(f)
+        for g in pending:
+            g.occurrences = [
+                o
+                for o in g.occurrences
+                if not any(
+                    _overlap(o, o2) >= 1
+                    for o2 in f.occurrences
+                )
+            ]
+            g.copies = sum(
+                (e - s + 1) // g.period for s, e in g.occurrences
+            )
+            g.coverage = sum(
+                ((e - s + 1) // g.period - 1) * g.period
+                for s, e in g.occurrences
+            )
 
+    # P 编号按首次出现顺序（谱面上先遇到的循环是 P1），不是按覆盖量
+    selected.sort(key=lambda f: min(s for s, _ in f.occurrences))
     for idx, f in enumerate(selected, start=1):
         f.id = f"P{idx}"
     return selected
