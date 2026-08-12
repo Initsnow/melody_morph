@@ -11,6 +11,7 @@ dependencies = [
 
 [project.scripts]
 gp-chords = "gpchords.annotate:main"
+gp-clear = "gpchords.clear:main"
 gp-info = "gpchords.info:main"
 gp-key = "gpchords.keywriter:main"
 gp-sections = "gpchords.sections:main"

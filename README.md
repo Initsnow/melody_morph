@@ -13,6 +13,7 @@ MIDI 旋律处理工具集 - 用于音乐制作中的旋律修改、和弦分配
 | `midi_to_ust.py` | MIDI 旋律转调内唱名 UST | [文档](doc/midi_to_ust.md) |
 | `gpreader/` | Guitar Pro (.gp/.gpx) 独立读取库（解析 GPIF、文件层写回） | [文档](doc/gp_parser.md) |
 | `gpchords/` | 和弦自动标注（`gp-chords`）、调性写入（`gp-key`）等命令 | [文档](doc/gp_parser.md) |
+| `gp-clear` | 清除指定轨道的和弦标注与自由文本，重新标注前还原干净状态 | [文档](doc/gp_parser.md) |
 | `gp-sections` | 自动分段：多特征检测段落边界、聚类命名并写回 `<Section>` 标记 | [文档](doc/gp_sections.md) |
 
 ## 快速开始
@@ -55,6 +56,11 @@ uv run gp-chords "song.gp" --track "Rhythm Guitar" --progressions
 
 # 自动判断调性并写入全部小节 -> <原名>_key.gp（原文件不变）
 uv run gp-key "song.gp"
+
+# 清除指定轨道的和弦与自由文本 -> <原名>_cleared.gp（原文件不变），
+# 重新标注前把轨道还原成干净状态（和弦库一并清空）
+uv run gp-clear "song.gp" --track "Rhythm Guitar"
+uv run gp-clear "song.gp" --track all --no-write
 
 # 按段落估计（转调谱）/ 强制指定调性
 uv run gp-key "song.gp" --per-section
