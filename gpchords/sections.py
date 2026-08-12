@@ -1123,10 +1123,11 @@ def assign_semantic_roles(
 
     判断依据（都是猜，不保证与转谱人一致）：
     - 反复出现 + 有人声 + 总长度最长 -> Chorus（2 小节的高密度碎片不算）；
-    - 反复出现 + 有人声 + 密度较低 -> Verse；
+    - 有人声：反复出现 -> Verse；全曲第一个有人声段即使只出现一次也是
+      Verse（Bridge 定义上不可能出现在主歌位置）；
     - 有人声的段紧邻 Chorus 起点之前 -> Pre-Chorus；
     - 纯器乐：较长 -> Solo，较短 -> Interlude；
-    - 其余有人声的段 -> Bridge；
+    - 其余有人声的段 -> Bridge（仅剩中段对比段）；
     - Intro/Outro 保持原判断，不参与。
     """
     from collections import defaultdict
@@ -1177,19 +1178,32 @@ def assign_semantic_roles(
         if role == "Chorus"
         for s in stats[letter]["sections"]
     }
+    # Pre-Chorus 先于 Verse 判定：紧邻副歌起点前的**短**人声段
+    # （总长 < 16 小节；16 小节的主歌不算，如《无论如何》17-32 的 Verse）
     for letter, st in stats.items():
-        if letter in roles or st["instrumental"]:
+        if letter in roles or st["instrumental"] or st["length"] >= 16:
             continue
         if any(s.end_bar + 1 in chorus_starts for s in st["sections"]):
             roles[letter] = "Pre-Chorus"
 
-    for letter, st in stats.items():
-        if letter in roles:
-            continue
-        if st["count"] >= 2 and not st["instrumental"]:
-            roles[letter] = "Verse"
-    for letter in list(stats):
+    # 主歌：反复出现的有人声段 + 全曲第一个有人声段（唯一首段也是 Verse，
+    # 而不是 Bridge——Bridge 定义上不可能出现在主歌位置）
+    for letter in vocal_repeated:
         if letter not in roles:
+            roles[letter] = "Verse"
+    first_vocal: Optional[str] = None
+    for sec in sections:
+        if sec.text in ("Intro", "Outro"):
+            continue
+        st = stats.get(sec.letter)
+        if st is not None and not st["instrumental"]:
+            first_vocal = sec.letter
+            break
+    if first_vocal is not None and first_vocal not in roles:
+        roles[first_vocal] = "Verse"
+
+    for letter, st in stats.items():
+        if letter not in roles and not st["instrumental"]:
             roles[letter] = "Bridge"
 
     seq: dict[str, int] = {}
