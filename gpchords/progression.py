@@ -12,9 +12,11 @@
    ``--min-ratio``（默认 0.6）就链成同一遍循环，允许变体重复（Verse 1
    和 Verse 2 换掉几个和弦仍算同一循环）。左极大且至少两遍的运行才保留。
 2. **模式聚类**：同一周期的运行按模式 LCS 相似度（默认 0.7）归成
-   loop family——分散在曲中各处的同名循环（副歌 1 / 副歌 2）共享一个
-   family。**逐轮选择**：每轮取覆盖最大的 family，选中后把它占用的区从
-   其余 family 移除并重算覆盖——长周期 family 不能靠"之后会被丢弃的区"
+   loop family（单链：与 family 内**任一**成员的相似即归入，尾声把
+   IV 换成 iv 的变体不会被首成员的 vi-vi 变体挡住）——分散在曲中各处
+   的同名循环（主歌 / 副歌 / 尾声共享 11556644）归一个 family。
+   **逐轮选择**：每轮取覆盖最大的 family，选中后把它占用的区从其余
+   family 移除并重算覆盖——长周期 family 不能靠"之后会被丢弃的区"
    虚增覆盖抢先（16 小节变体句不会挤掉更准的 8 小节循环）。P 编号按
    首次出现顺序，谱面上先遇到的循环是 P1。
 
@@ -192,7 +194,11 @@ def find_loop_families(
     是区内循环遍数。
     """
     n = len(tokens)
-    runs: list[tuple[int, int, int, float]] = []  # (period, start0, copies, quality)
+    # (period, start0, copies, quality, repr)
+    # repr = 首块对运行内其他块的平均相似度：平局时取首块更能代表整段
+    # 运行的窗口（对齐乐句网格），如主歌 8 小节循环取第 3 小节起的
+    # I-I-V-V-…，而不是吞进 intro 多余 I 的第 2 小节起的 I-I-I-V-…。
+    runs: list[tuple[int, int, int, float, float]] = []
     for p in range(min_period, max_period + 1):
         for i in range(n - 2 * p + 1):
             copies = 1
@@ -211,14 +217,18 @@ def find_loop_families(
                 for k in range(copies - 1)
             ) / (copies - 1)
             if quality >= min_ratio:
-                runs.append((p, i, copies, quality))
+                repr_ = sum(
+                    _block_degree_sim(tokens, i, i + k * p, p)
+                    for k in range(1, copies)
+                ) / (copies - 1)
+                runs.append((p, i, copies, quality, repr_))
 
     # 周期约简：块的度数是更短周期的精确重复时（如 6 小节 V-I-V-I-V-I
     # 本质是 2 小节循环重复 3 遍），按短周期重新链接。消除"同一段和声
     # 被长周期平移切片"的错位——如 intro 的 V-I 循环被切成从第 3 小节
     # 开始的 6 小节窗口。重链失败（如跨小节休止打断短周期）则保留原周期。
-    reduced: list[tuple[int, int, int, float]] = []
-    for p, i, copies, quality in runs:
+    reduced: list[tuple[int, int, int, float, float]] = []
+    for p, i, copies, quality, repr_ in runs:
         d = _primitive_period(tokens[i : i + p])
         if d < p and d >= min_period:
             copies_d = 1
@@ -242,22 +252,28 @@ def find_loop_families(
                     for k in range(copies_d - 1)
                 ) / (copies_d - 1)
                 if quality_d >= min_ratio:
-                    reduced.append((d, i, copies_d, quality_d))
+                    repr_d = sum(
+                        _block_degree_sim(tokens, i, i + k * d, d)
+                        for k in range(1, copies_d)
+                    ) / (copies_d - 1)
+                    reduced.append((d, i, copies_d, quality_d, repr_d))
                     continue
-        reduced.append((p, i, copies, quality))
+        reduced.append((p, i, copies, quality, repr_))
     runs = reduced
 
     # 同一周期内：滑动错位会产生大量互相重叠（≥2 小节）的同款运行，
     # 默认保留质量最高的一条（对齐最好）；但若另一条的 span 更大且质量
     # 没有明显更差，用更大窗口替换——大窗口通常从乐段边界起并覆盖变体遍
     # （如 8 小节循环从第 3 小节起 ×4，而不是从第 4 小节起 ×3），
-    # 避免循环起点被"对齐更好"的平移小窗挤到乐段中间。
-    deduped: list[tuple[int, int, int, float]] = []
+    # 避免循环起点被"对齐更好"的平移小窗挤到乐段中间。质量与跨度都相同时
+    # 取首块代表性更高的窗口，再取更早起点（intro 的 I-V 循环不会被
+    # 平移到 V-I 窗口）。
+    deduped: list[tuple[int, int, int, float, float]] = []
     for p in sorted({r[0] for r in runs}):
-        kept: list[tuple[int, int, int, float]] = []
+        kept: list[tuple[int, int, int, float, float]] = []
         for r in sorted(
             (x for x in runs if x[0] == p),
-            key=lambda x: (-x[3], -x[2], x[1]),
+            key=lambda x: (-x[3], -x[2], -x[4], x[1]),
         ):
             s0, copies = r[1], r[2]
             conflict = next(
@@ -285,18 +301,27 @@ def find_loop_families(
                 kept.append(r)
         deduped.extend(kept)
 
-    # 同一周期内按模式相似度聚类（分散的同名循环归一族）
+    # 同一周期内按模式相似度聚类（分散的同名循环归一族）。单链归族：
+    # 新运行与 family 内**任一**成员的模式相似即归入（而不是只跟首个
+    # 成员比）——尾声把末位 IV 换成 iv 时仍与副歌成员 7/8 相似，不会被
+    # 首成员（主歌的 vi-vi 变体）挡住而拆成另一个 P。
     families: list[LoopFamily] = []
-    for p, i, copies, quality in sorted(
+    family_patterns: list[list[list[str]]] = []
+    for p, i, copies, quality, repr_ in sorted(
         deduped, key=lambda r: (r[0], r[1])
     ):
         pattern = [tokens[i + k][0] for k in range(p) if tokens[i + k] is not None]
         family = None
-        for cand in families:
+        family_idx = -1
+        for fi, cand in enumerate(families):
             if cand.period != p:
                 continue
-            if _lcs_sim(pattern, cand.pattern) >= similarity:
+            if any(
+                _lcs_sim(pattern, member) >= similarity
+                for member in family_patterns[fi]
+            ):
                 family = cand
+                family_idx = fi
                 break
         if family is None:
             family = LoopFamily(
@@ -305,6 +330,9 @@ def find_loop_families(
                 period=p,
             )
             families.append(family)
+            family_patterns.append([pattern])
+        else:
+            family_patterns[family_idx].append(pattern)
         start, end = i + 1, i + copies * p
         family.occurrences.append((start, end))
         family.copies += copies

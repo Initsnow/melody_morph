@@ -61,6 +61,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import re
 import sys
 import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
@@ -1642,6 +1643,24 @@ def write_chords_to_gp(
                 ft_el = beat_el.find("FreeText")
                 if ft_el is not None:
                     beat_el.remove(ft_el)
+
+    if overwrite and progression_labels and beats_container is not None:
+        # --overwrite 时清掉本轨残留的旧进行标注：上次运行遗留、本次
+        # 没有新标注/新和弦覆盖的拍（如静态 [I,I,I] 已被过滤、该拍也
+        # 没识别出和弦），否则谱面会留下过时的 P3: I-I-I 之类。只删以
+        # "P<数字>:" 开头的机器标注，不碰用户手写文本。
+        track_beat_ids = {b.id for m in track.measures for b in m.beats}
+        for beat_el in beats_container.findall("Beat"):
+            if beat_el.get("id") not in track_beat_ids:
+                continue
+            if beat_el.get("id") in prog_beat_ids:
+                continue
+            ft_el = beat_el.find("FreeText")
+            if ft_el is None or not (ft_el.text or "").strip():
+                continue
+            first_line = (ft_el.text or "").strip().split("\n")[0].strip()
+            if re.match(r"^P\d+:", first_line):
+                beat_el.remove(ft_el)
 
     # 写新 zip：逐项保留原文件的压缩方式与时间戳，GP8 对 zip 容器结构敏感
     write_gpif(input_path, output_path, root)

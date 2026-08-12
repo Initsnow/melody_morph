@@ -205,7 +205,8 @@ def test_per_occurrence_conflict_keeps_intro_region():
 
 def test_variant_16bar_phrase_not_clumped():
     """两个 8 小节变体句链成 16 小节时，选族保留 8 小节循环，
-    不再聚成一坨 16 小节模式（--progressions 标注可读性回归）。"""
+    不再聚成一坨 16 小节模式；主歌/副歌同进行归到同一 family，
+    起点取更靠后的循环（第 3 小节，而不是吞进 intro 多余 I 的第 2 小节）。"""
     verse = (
         [tok("I"), tok("I"), tok("V"), tok("V"), tok("vi"), tok("vi"), tok("IV"), tok("IV")]
         + [tok("I"), tok("I"), tok("V"), tok("V"), tok("VI"), tok("vi"), tok("IV"), tok("IV")]
@@ -220,12 +221,9 @@ def test_variant_16bar_phrase_not_clumped():
     for f in fams:
         by_period.setdefault(f.period, []).append(f)
     assert 16 not in by_period  # 变体句不再合并成 16 小节
-    assert len(by_period[8]) == 2  # 主歌 + 副歌两个 8 小节 family
-    verse_f, chorus_f = sorted(
-        by_period[8], key=lambda f: min(s for s, _ in f.occurrences)
-    )
-    assert verse_f.occurrences == [(2, 33)]
-    assert chorus_f.occurrences == [(45, 100)]
+    assert len(by_period[8]) == 1  # 主歌与副歌同一进行，归一个 family
+    main = by_period[8][0]
+    assert main.occurrences == [(3, 34), (45, 100)]
     assert fams[0].id == "P1"  # 按出现顺序：主歌是 P1
 
 

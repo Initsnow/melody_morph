@@ -373,6 +373,76 @@ def test_overwrite_replaces_stale_progression_label(tmp_path):
     assert ft2.count("\n") == 1
 
 
+def test_overwrite_sweeps_orphan_stale_progression_label(tmp_path):
+    """--overwrite 清理上次运行遗留、本次没有新标注覆盖的旧 P 行
+    （如静态 [I,I,I] 被过滤后残留的 P3: I-I-I），不碰用户手写文本。"""
+    gpif = """<GPIF>
+      <GPVersion>8.0</GPVersion>
+      <Tracks><Track id="0"><Name>L</Name><Staves><Staff><Properties>
+        <Property name="Tuning"><Pitches>40 45 50 55 59 64</Pitches></Property>
+        <Property name="DiagramCollection"><Items /></Property>
+      </Properties></Staff></Staves></Track></Tracks>
+      <MasterBars>
+        <MasterBar><Time>4/4</Time><Key><AccidentalCount>0</AccidentalCount>
+          <Mode>Major</Mode></Key><Bars>0</Bars></MasterBar>
+        <MasterBar><Time>4/4</Time><Key><AccidentalCount>0</AccidentalCount>
+          <Mode>Major</Mode></Key><Bars>1</Bars></MasterBar>
+      </MasterBars>
+      <Bars>
+        <Bar id="0"><Voices>0</Voices></Bar>
+        <Bar id="1"><Voices>1</Voices></Bar>
+      </Bars>
+      <Voices>
+        <Voice id="0"><Beats>0</Beats></Voice>
+        <Voice id="1"><Beats>1</Beats></Voice>
+      </Voices>
+      <Beats>
+        <Beat id="0"><Notes>0</Notes><Rhythm><ref>0</ref></Rhythm></Beat>
+        <Beat id="1"><FreeText>P3: I-I-I</FreeText><Notes>1</Notes><Rhythm><ref>0</ref></Rhythm></Beat>
+      </Beats>
+      <Notes>
+        <Note id="0"><Properties>
+          <Property name="Midi"><Number>48</Number></Property>
+          <Property name="Fret"><Fret>1</Fret></Property>
+          <Property name="String"><String>3</String></Property>
+        </Properties></Note>
+        <Note id="1"><Properties>
+          <Property name="Midi"><Number>52</Number></Property>
+          <Property name="Fret"><Fret>2</Fret></Property>
+          <Property name="String"><String>3</String></Property>
+        </Properties></Note>
+      </Notes>
+      <Rhythms><Rhythm id="0"><NoteValue>Quarter</NoteValue></Rhythm></Rhythms>
+    </GPIF>"""
+    gp = tmp_path / "stale.gp"
+    with zipfile.ZipFile(gp, "w") as z:
+        z.writestr("Content/score.gpif", gpif)
+        z.writestr("VERSION", "8.0")
+
+    song = parse_gp(gp)
+    track = song.tracks[0]
+    beat = track.measures[0].beats[0]
+    results = [_result_for(beat, 1, 0, chord("C", 0, "maj"))]
+    out = tmp_path / "stale_chords.gp"
+    write_chords_to_gp(
+        str(gp),
+        str(out),
+        song,
+        track,
+        results,
+        key_root=0,
+        overwrite=True,
+        progression_labels={1: "P1: I-IV-V-vi"},
+        progression_romans={1: "I"},
+    )
+    verify = parse_gp(out)
+    m1 = verify.tracks[0].measures[0]
+    m2 = verify.tracks[0].measures[1]
+    assert m1.beats[0].free_text == "I\nP1: I-IV-V-vi"
+    # 第 2 小节没有新标注/新和弦，旧 P3 行被清掉
+    assert not m2.beats[0].free_text
+
+
 def test_restore_cdata_wraps_new_freetext():
     from gpreader.writer import restore_cdata
 
