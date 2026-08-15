@@ -79,6 +79,18 @@ _CIRCLE_FLAT = [0, 5, 10, 3, 8, 1, 6]
 _SHARP_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 _FLAT_NAMES = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"]
 
+# Tempo automation <Value>X ref</Value> 的拍单位 -> 四分音符倍率。
+# GPIF 的 ref 含义（alphaTab 与 TuxGuitar 的 GPX 解析器一致）：
+#   1=八分(×0.5) 2=四分(×1.0，GP8 默认写法) 3=附点四分(×1.5)
+#   4=二分(×2.0) 5=附点二分(×3.0)
+# 有效四分音符 BPM = X × 倍率。GP8 一律写 ref=2。
+TEMPO_REFERENCE_FACTOR = {1: 0.5, 2: 1.0, 3: 1.5, 4: 2.0, 5: 3.0}
+
+
+def tempo_effective_bpm(label: float, reference: int) -> float:
+    """按拍单位把 tempo 标签换算成有效四分音符 BPM。"""
+    return label * TEMPO_REFERENCE_FACTOR.get(reference, 1.0)
+
 
 @dataclass
 class GPChord:
@@ -155,7 +167,8 @@ class GPSong:
     artist: str = ""
     album: str = ""
     tracks: list[GPTrack] = field(default_factory=list)
-    # 小节序号（0 起）-> BPM，来自 <MasterTrack><Automations><Automation Type="Tempo">
+    # 小节序号（0 起）-> 有效四分音符 BPM（标签 × 拍单位倍率），
+    # 来自 <MasterTrack><Automations><Automation Type="Tempo">
     tempos: dict[int, int] = field(default_factory=dict)
 
     def tempo_at(self, bar_index: int) -> Optional[int]:
@@ -285,7 +298,8 @@ def _parse_gpif(root: ET.Element, version: str) -> GPSong:
     # GPVersion（XML 内）是实际保存程序的版本，VERSION 文件只是格式类别
     song = GPSong(gp_version=(root.findtext("GPVersion") or version).strip())
 
-    # 速度 automation：<Value>97 2</Value> 第一个数是 BPM
+    # 速度 automation：<Value>97 2</Value> 第一个数是 BPM 标签，
+    # 第二个数是拍单位（见 TEMPO_REFERENCE_FACTOR），有效 BPM = 标签 × 倍率
     master_track = root.find("MasterTrack")
     if master_track is not None:
         for auto in master_track.findall("Automations/Automation"):
@@ -295,8 +309,11 @@ def _parse_gpif(root: ET.Element, version: str) -> GPSong:
             value_text = (auto.findtext("Value") or "").strip()
             if not bar_text.lstrip("-").isdigit() or not value_text:
                 continue
+            parts = value_text.split()
             try:
-                song.tempos[int(bar_text)] = int(float(value_text.split()[0]))
+                label = float(parts[0])
+                ref = int(parts[1]) if len(parts) > 1 else 2
+                song.tempos[int(bar_text)] = int(round(tempo_effective_bpm(label, ref)))
             except ValueError:
                 continue
 
@@ -469,7 +486,8 @@ def _beat_duration(beat_el: ET.Element, rhythms: dict[str, ET.Element]) -> float
     dot = rhythm.find("AugmentationDot")
     if dot is not None:
         count = int(dot.get("count", "1") or "1")
-        dur *= 1.5**count
+        # 乐理附点：1 点 ×1.5、2 点 ×1.75、3 点 ×1.875（2 - 0.5^count）
+        dur *= 2.0 - 0.5 ** count
     tuplet = rhythm.find("PrimaryTuplet")
     if tuplet is not None:
         num = int(tuplet.findtext("Num") or "1")

@@ -121,37 +121,28 @@ def read_gpif(input_path: str | Path) -> tuple[ET.Element, str]:
     return ET.fromstring(xml_bytes), gpif_name
 
 
-def write_gpif(
+def _write_zip_with_gpif(
     input_path: str | Path,
     output_path: str | Path,
-    root: ET.Element,
-    extra_fix=None,
+    gpif_bytes: bytes,
 ) -> None:
-    """把修改后的 GPIF XML 树写回新的 .gp/.gpx 文件（原文件不动）。
+    """把替换后的 score.gpif 写回新的 .gp/.gpx 文件（原文件不动）。
 
     逐项保留原 zip 的压缩方式、时间戳与 extra 属性——GP8 对 zip 容器结构敏感。
-    ``extra_fix``：可选回调，在 CDATA 恢复后、写盘前对 XML 文本做追加处理
-    （如 gpchords 的段落写回需要把新增 <Section> 的 Letter/Text 包成 CDATA）。
+    除 score.gpif 外所有条目原样复制，不经过 XML 重序列化。
     """
     with zipfile.ZipFile(input_path) as zin:
         infos = zin.infolist()
         names = set(zin.namelist())
-        gpif_name = "Content/score.gpif" if "Content/score.gpif" in names else "score.gpif"
-        gpif_text = zin.read(gpif_name).decode("utf-8")
-        xml_text = ET.tostring(root, encoding="unicode")
-        xml_text = restore_cdata(xml_text, cdata_pairs_from(gpif_text))
-        if extra_fix is not None:
-            xml_text = extra_fix(xml_text)
-        xml_bytes = (
-            '<?xml version="1.0" encoding="utf-8"?>\n'.encode("utf-8")
-            + xml_text.encode("utf-8")
+        gpif_name = (
+            "Content/score.gpif" if "Content/score.gpif" in names else "score.gpif"
         )
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as zout:
             for info in infos:
                 # 只读当前条目，避免把整个 zip 解压到内存。
                 content = (
-                    xml_bytes
+                    gpif_bytes
                     if info.filename == gpif_name
                     else zin.read(info.filename)
                 )
@@ -170,3 +161,52 @@ def write_gpif(
                 zout.writestr(new_info, content)
     with open(output_path, "wb") as f:
         f.write(buffer.getvalue())
+
+
+def rewrite_gpif_text(
+    input_path: str | Path,
+    output_path: str | Path,
+    transform,
+) -> None:
+    """对 score.gpif 的**文本**应用 ``transform(str) -> str`` 后写回新文件。
+
+    与 :func:`write_gpif` 不同，这里不做 XML 重序列化，只按原文本做
+    定向替换（如只改 tempo automation 的 <Value>），其余内容逐字节保留，
+    风险最小。其余 zip 条目原样复制。
+    """
+    with zipfile.ZipFile(input_path) as zin:
+        names = set(zin.namelist())
+        gpif_name = (
+            "Content/score.gpif" if "Content/score.gpif" in names else "score.gpif"
+        )
+        xml_text = zin.read(gpif_name).decode("utf-8")
+    _write_zip_with_gpif(input_path, output_path, transform(xml_text).encode("utf-8"))
+
+
+def write_gpif(
+    input_path: str | Path,
+    output_path: str | Path,
+    root: ET.Element,
+    extra_fix=None,
+) -> None:
+    """把修改后的 GPIF XML 树写回新的 .gp/.gpx 文件（原文件不动）。
+
+    逐项保留原 zip 的压缩方式、时间戳与 extra 属性——GP8 对 zip 容器结构敏感。
+    ``extra_fix``：可选回调，在 CDATA 恢复后、写盘前对 XML 文本做追加处理
+    （如 gpchords 的段落写回需要把新增 <Section> 的 Letter/Text 包成 CDATA）。
+    """
+    with zipfile.ZipFile(input_path) as zin:
+        names = set(zin.namelist())
+        gpif_name = (
+            "Content/score.gpif" if "Content/score.gpif" in names else "score.gpif"
+        )
+        gpif_text = zin.read(gpif_name).decode("utf-8")
+        xml_text = ET.tostring(root, encoding="unicode")
+        xml_text = restore_cdata(xml_text, cdata_pairs_from(gpif_text))
+        if extra_fix is not None:
+            xml_text = extra_fix(xml_text)
+        xml_bytes = (
+            '<?xml version="1.0" encoding="utf-8"?>\n'.encode("utf-8")
+            + xml_text.encode("utf-8")
+        )
+    _write_zip_with_gpif(input_path, output_path, xml_bytes)

@@ -15,6 +15,7 @@ MIDI 旋律处理工具集 - 用于音乐制作中的旋律修改、和弦分配
 | `gpchords/` | 和弦自动标注（`gp-chords`）、调性写入（`gp-key`）等命令 | [文档](doc/gp_parser.md) |
 | `gp-clear` | 清除指定轨道的和弦标注与自由文本，重新标注前还原干净状态 | [文档](doc/gp_parser.md) |
 | `gp-sections` | 自动分段：多特征检测段落边界、聚类命名并写回 `<Section>` 标记 | [文档](doc/gp_sections.md) |
+| `melody_analyzer.py` | 读取 GP 旋律轨，输出乐句结构、重复动机使用位置与音级/节奏分布报告 | 本文件 |
 
 ## 快速开始
 
@@ -97,6 +98,21 @@ uv run gp-sections "song.gp"
 # 只预览候选边界和触发证据（推荐先看再写回）；--name 可自定义段落文本
 uv run gp-sections "song.gp" --no-write
 uv run gp-sections "song.gp" --name "A=Verse 1" --out sections.json
+
+# 旋律分析拆解：输出乐句、动机使用位置和分布统计的 Markdown 报告
+uv run python melody_analyzer.py "song.gp" --track "Vocals" --report vocal_report.md
+uv run python melody_analyzer.py "song.gp" --track "Lead Guitar" --report lead_report.md
+
+# 动机发现是在整条旋律上做的（跨乐句/跨段落），不是单乐句内部：
+# 支持逐字反复、移调序列、八度/音级变体、轮廓反复、纯节奏型六种匹配，
+# 输出按显著性排序的去冗余动机家族，并标注每次出现的移调与变体类型。
+# 常用参数：
+#   --min-motif-notes 3    最短动机长度（音符数）
+#   --max-motif-notes 24   最长动机长度
+#   --min-occurrences 2    至少非重叠出现次数
+#   --motif-gap 1.0        超过该四分音符长度的休止视为动机匹配的旋律段边界
+#   --max-motifs 40        报告中最多保留的动机数量（0 = 全部）
+uv run python melody_analyzer.py "song.gp" --track "Vocals" --max-motifs 20
 ```
 
 ## 演示

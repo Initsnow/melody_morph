@@ -299,6 +299,63 @@ def test_progression_label_multiline_and_shared_beat(tmp_path):
     assert m2.beats[0].chord is None  # 另一个共享位置不被污染
 
 
+def test_progression_label_anacrusis_bar(tmp_path):
+    """循环进行标注挂在弱起/前奏小节：region 起点小节第一拍是休止
+    （首音不在 0.0 位置）时标注不能丢（回归：旧实现用 0.0 窗口找锚拍，
+    找不到就静默跳过 -> 副歌弱起小节的 P 行整行丢失）。"""
+    gpif = """<GPIF>
+      <GPVersion>8.0</GPVersion>
+      <Tracks><Track id="0"><Name>L</Name><Staves><Staff><Properties>
+        <Property name="Tuning"><Pitches>40 45 50 55 59 64</Pitches></Property>
+        <Property name="DiagramCollection"><Items /></Property>
+      </Properties></Staff></Staves></Track></Tracks>
+      <MasterBars><MasterBar><Time>4/4</Time>
+        <Key><AccidentalCount>0</AccidentalCount><Mode>Major</Mode></Key>
+        <Bars>0</Bars></MasterBar></MasterBars>
+      <Bars><Bar id="0"><Voices>0</Voices></Bar></Bars>
+      <Voices><Voice id="0"><Beats>0 1 2</Beats></Voice></Voices>
+      <Beats>
+        <Beat id="0"><Rhythm ref="0" /></Beat>
+        <Beat id="1"><Rhythm ref="0" /></Beat>
+        <Beat id="2"><Notes>0</Notes><Rhythm ref="0" /></Beat>
+      </Beats>
+      <Notes>
+        <Note id="0"><Properties>
+          <Property name="Midi"><Number>48</Number></Property>
+          <Property name="Fret"><Fret>1</Fret></Property>
+          <Property name="String"><String>3</String></Property>
+        </Properties></Note>
+      </Notes>
+      <Rhythms><Rhythm id="0"><NoteValue>Quarter</NoteValue></Rhythm></Rhythms>
+    </GPIF>"""
+    gp = tmp_path / "anacrusis.gp"
+    with zipfile.ZipFile(gp, "w") as z:
+        z.writestr("Content/score.gpif", gpif)
+        z.writestr("VERSION", "8.0")
+
+    song = parse_gp(gp)
+    track = song.tracks[0]
+    beat = track.measures[0].beats[2]  # 小节内第一个有音符的拍（位置 2.0）
+    assert beat.start_quarters == 2.0
+    results = [_result_for(beat, 1, 0, chord("C", 0, "maj"))]
+    out = tmp_path / "anacrusis_chords.gp"
+    stats = write_chords_to_gp(
+        str(gp),
+        str(out),
+        song,
+        track,
+        results,
+        key_root=0,
+        progression_labels={1: "P1: I-IV-V-vi"},
+        progression_romans={1: "I"},
+    )
+    assert stats["written"] == 1
+    verify = parse_gp(out)
+    vb = verify.tracks[0].measures[0].beats[2]
+    # 弱起小节的进行标注写在了第一个有音符的拍上
+    assert vb.free_text == "I\nP1: I-IV-V-vi"
+
+
 def test_overwrite_keeps_progression_label(tmp_path):
     """--overwrite 时罗马数字写回不能顶掉刚写好的循环进行注解
     （回归：进行标注先写、和弦罗马后写，overwrite 直接替换 FreeText
@@ -482,6 +539,51 @@ def test_progression_rerun_without_overwrite_does_not_duplicate(tmp_path):
     verify = parse_gp(out2)
     ft = verify.tracks[0].measures[0].beats[0].free_text
     assert ft == "I\nP1: I-IV-V-vi"
+    assert ft.count("\n") == 1
+
+
+def test_progression_rerun_with_variant_prime_no_duplicate(tmp_path):
+    """变体遍标注 P1' 也是机器标注：重跑 --progressions 时旧 P1' 行被
+    替换而不是叠加（回归：正则 ^P\\d+: 匹配不到 P1'，会被当成用户文本
+    叠成两行）。"""
+    gp = tmp_path / "prog_prime.gp"
+    _mini_gp(gp)
+    song = parse_gp(gp)
+    track = song.tracks[0]
+    beat = track.measures[0].beats[0]
+    results = [_result_for(beat, 1, 0, chord("C", 0, "maj"))]
+
+    out1 = tmp_path / "prog_prime_1.gp"
+    write_chords_to_gp(
+        str(gp),
+        str(out1),
+        song,
+        track,
+        results,
+        key_root=0,
+        progression_labels={1: "P1': I-IV-V-vi"},
+        progression_romans={1: "I"},
+    )
+    verify1 = parse_gp(out1)
+    assert verify1.tracks[0].measures[0].beats[0].free_text == "I\nP1': I-IV-V-vi"
+
+    song2 = parse_gp(out1)
+    track2 = song2.tracks[0]
+    beat2 = track2.measures[0].beats[0]
+    results2 = [_result_for(beat2, 1, 0, chord("C", 0, "maj"))]
+    out2 = tmp_path / "prog_prime_2.gp"
+    write_chords_to_gp(
+        str(out1),
+        str(out2),
+        song2,
+        track2,
+        results2,
+        key_root=0,
+        progression_labels={1: "P1': I-IV-V-vi"},
+        progression_romans={1: "I"},
+    )
+    ft = parse_gp(out2).tracks[0].measures[0].beats[0].free_text
+    assert ft == "I\nP1': I-IV-V-vi"
     assert ft.count("\n") == 1
 
 

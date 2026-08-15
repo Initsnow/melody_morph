@@ -127,7 +127,8 @@ def test_wildcard_rest_measures():
 
 
 def test_detect_progressions_region_labels():
-    """同一 family 的不同 region 各标自己实际进行的完整罗马数字（含品质）。"""
+    """每个循环遍的起点都标该遍实际进行的完整罗马数字（含品质）；
+    与第一次出现的那遍完全一致仍标 P1，有变体则标 P1'。"""
     def res(bar, c):
         return {"bar": bar, "chord": c, "key_root": 0, "key_mode": "Major"}
 
@@ -148,12 +149,19 @@ def test_detect_progressions_region_labels():
     families, labels, romans, payload = _detect_progressions(results)
 
     assert len(families) == 1
+    # region 1（1-8，2 遍）：与第一次出现完全一致，都标 P1（不带 '）
     assert labels[1] == "P1: I-IV-V7-vi"
-    assert labels[13] == "P1: I-IV-V-vi"
+    assert labels[5] == "P1: I-IV-V7-vi"
+    # region 2（13-20，2 遍）：相对第一次出现有变体（V7 -> V），标 P1'
+    assert labels[13] == "P1': I-IV-V-vi"
+    assert labels[17] == "P1': I-IV-V-vi"
     assert romans[1] == "I"
+    assert romans[5] == "I"
     assert payload[0]["regions"] == [
-        {"start": 1, "end": 8, "label": "P1: I-IV-V7-vi"},
-        {"start": 13, "end": 20, "label": "P1: I-IV-V-vi"},
+        {"start": 1, "end": 4, "label": "P1: I-IV-V7-vi"},
+        {"start": 5, "end": 8, "label": "P1: I-IV-V7-vi"},
+        {"start": 13, "end": 16, "label": "P1': I-IV-V-vi"},
+        {"start": 17, "end": 20, "label": "P1': I-IV-V-vi"},
     ]
 
 

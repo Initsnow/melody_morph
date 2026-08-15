@@ -8,3 +8,10 @@ wheels/
 
 # Virtual environments
 .venv
+
+# 参考用的上游克隆（MidiBpmChanger 源码）
+repo_src/
+
+# 评审报告（仅本地参考，不入库）
+lead_report.md
+vocal_report.md
