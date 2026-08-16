@@ -84,7 +84,7 @@ FEATURE_NAMES = {
 FEATURE_WEIGHTS = {
     "chord": 1.0,
     "drum": 1.0,
-    "bass": 0.6,  # 行走贝斯每小节换根音，逐小节根音 novelty 噪声大，适度降权
+    "bass": 0.0,  # 行走贝斯每小节换根音，逐小节根音 novelty 噪声大，实测关掉可减少假阳性
     "density": 2.0,
     "vocal_act": 1.5,
     "vocal_pitch": 1.0,
@@ -498,11 +498,11 @@ class Boundary:
 
 def detect_boundaries(
     features: SongFeatures,
-    L: int = 4,
-    gap: int = 4,
-    kthr: float = 0.4,
-    rep_weight: float = 0.25,
-    split_period: int = 8,
+    L: int = 6,
+    gap: int = 6,
+    kthr: float = 0.8,
+    rep_weight: float = 0.2,
+    split_period: int = 0,
 ) -> list[Boundary]:
     """多特征 novelty 加权 + 定向重复起点 + 连续循环切分 + 硬信号 → 候选边界。
 
@@ -685,6 +685,24 @@ def detect_boundaries(
                 forced=b in forced_indices,
             )
         )
+
+    # 弱边界后处理：既没有短窗持续变化、又没有重复支撑的边界，或分数很低且
+    # 证据单一，多半是长段落内部的编曲波动而不是真实段落切换。
+    def _weak_boundary(b: Boundary) -> bool:
+        if b.forced:
+            return False
+        idx = b.bar - 1
+        rep = rep_raw[idx] if rep_raw and idx < len(rep_raw) else 0.0
+        step = _window_step(features, b.bar)
+        if step < 0.5 and rep < 0.7:
+            return True
+        if b.score < 2.0 and rep < 0.7:
+            return True
+        if b.score < 1.0 and len(b.evidence) <= 1:
+            return True
+        return False
+
+    out = [b for b in out if not _weak_boundary(b)]
 
     # 硬信号原因并入附近边界的证据（不再单独强制）
     for bar, reasons in sorted(features.hard_events.items()):
@@ -1291,6 +1309,7 @@ def run(args) -> dict:
         L=args.novelty_l,
         gap=args.gap,
         kthr=args.threshold,
+        split_period=args.split_period,
     )
     sections = build_sections(
         boundaries,
@@ -1395,16 +1414,16 @@ def main() -> None:
         "--vocal-track", default=None, metavar="TRACK",
         help="人声/旋律轨（默认自动识别；none 关闭人声特征）",
     )
-    parser.add_argument("--min-bars", type=int, default=2, help="过短段合并阈值（小节）")
+    parser.add_argument("--min-bars", type=int, default=4, help="过短段合并阈值（小节）")
     parser.add_argument("--similarity", type=float, default=0.6, help="段落聚类相似度阈值")
     parser.add_argument("--novelty-l", type=int, default=6, help="novelty 块长（小节）")
-    parser.add_argument("--gap", type=int, default=4, help="候选边界最小间距（小节）")
+    parser.add_argument("--gap", type=int, default=6, help="候选边界最小间距（小节）")
     parser.add_argument(
-        "--threshold", type=float, default=0.4,
+        "--threshold", type=float, default=0.8,
         help="峰阈值 = 均值 + threshold×标准差",
     )
     parser.add_argument(
-        "--split-period", type=int, default=8,
+        "--split-period", type=int, default=0,
         help="连续重复循环的切分周期下限（小节）：周期达到该值的循环"
         "在每遍起点切段（0 关闭；如 8 小节 Verse ×2 -> 第二遍是新段）",
     )
