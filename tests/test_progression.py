@@ -160,10 +160,11 @@ def test_detect_progressions_pickup_bar_anchor_shift():
     assert labels[2] == "P1: ·-IV-vi-IV"
     assert len(labels[2].split(": ", 1)[1].split("-")) == 4
     assert romans[2] == "IV"
-    # 后续循环遍仍按各自的起点标注变体
-    assert labels[5] == "P1': vi7-IV-vi-IV"
-    assert labels[9] == "P1': vi-IV-vi-IV"
-    assert labels[13] == "P1': I-IV-vi-IV"
+    # 后续循环遍如果顺序不同（旋转/换开头），按新的相似度规则拆成 P2；
+    # 同一 P2 内仍有小变体用 P2' 表示
+    assert labels[5] == "P2: vi7-IV-vi-IV"
+    assert labels[9] == "P2': vi-IV-vi-IV"
+    assert labels[13] == "P2': I-IV-vi-IV"
     # payload 的 region start 也使用实际可写的锚点小节，end 仍是该遍原始范围
     assert [r["start"] for r in payload[0]["regions"]] == [2, 5, 9, 13, 17, 21]
     assert [r["end"] for r in payload[0]["regions"]] == [4, 8, 12, 16, 20, 24]

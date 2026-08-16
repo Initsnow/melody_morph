@@ -1839,6 +1839,7 @@ def _detect_progressions(
     bar_all_romans = _bar_all_romans(results)
     labels: dict[int, str] = {}
     romans: dict[int, str] = {}
+    per_family_labels: dict[str, dict[int, str]] = {}
     for f in families:
         # 第一次出现的那遍是参照（P1，不带 '）；后续遍实际进行与它
         # 完全一致也不带 '，有变体（和弦进行不同）则在 P 后加 '（P1'），
@@ -1848,6 +1849,7 @@ def _detect_progressions(
         # 这样第 1 个标签会写到第 2 小节，但它描述的仍是第 1-4 小节的
         # 原始循环，避免和第 2 个循环遍（第 5 小节起）内容重叠。
         reference = _region_label(f.id, bar_all_romans, f.occurrences[0][0], f.period)
+        fam_labels: dict[int, str] = {}
         for start, end in f.occurrences:
             # 每个循环遍的起点都标（region 连续运行内每一遍），
             # 标注内容是该遍实际进行的完整罗马数字（变体遍直接可见）。
@@ -1860,8 +1862,39 @@ def _detect_progressions(
                     fid, _, body = label.partition(": ")
                     label = f"{fid}': {body}"
                 labels.setdefault(anchor, label)
+                fam_labels.setdefault(anchor, label)
                 if anchor not in romans and bar_romans.get(anchor):
                     romans[anchor] = bar_romans[anchor]
+        per_family_labels[f.id] = fam_labels
+
+    # 同一个检测 family 里，如果实际进行差异较大（例如旋转、换了开头），
+    # 不再全部叫 P1/P1'，而是按完整进行相似度聚成 P1/P2/P3...
+    next_p = 1
+    for f in families:
+        fam_labels = per_family_labels.get(f.id)
+        if not fam_labels:
+            continue
+        clusters: list[tuple[list[str], list[int]]] = []
+        for anchor in sorted(fam_labels):
+            body = fam_labels[anchor].split(": ", 1)[1]
+            toks = body.split("-")
+            placed = False
+            for cl in clusters:
+                if _progression_similarity(cl[0], toks) >= 0.7:
+                    cl[1].append(anchor)
+                    placed = True
+                    break
+            if not placed:
+                clusters.append((toks, [anchor]))
+        for ref_tokens, anchors in clusters:
+            ref_body = "-".join(ref_tokens)
+            pid = f"P{next_p}"
+            next_p += 1
+            for anchor in anchors:
+                body = fam_labels[anchor].split(": ", 1)[1]
+                suffix = "" if body == ref_body else "'"
+                labels[anchor] = f"{pid}{suffix}: {body}"
+
     payload = [
         {
             "id": f.id,
@@ -1954,6 +1987,24 @@ def _region_label(
     if not any(part != "·" for part in parts):
         return family_id
     return f"{family_id}: {'-'.join(parts)}"
+
+
+def _progression_similarity(a: list[str], b: list[str]) -> float:
+    """两条进行标注的相似度。
+
+    先去掉 ``·`` 占位符，然后按**从头开始的位置**逐项比较。这样能区分：
+
+    - 单个和弦替换（如 V7 -> V）：相似度较高，仍算同一进行变体；
+    - 旋转/换开头（如 IV-V-vi-I 和 vi7-III-IV-V）：从头开始几乎全错开，
+      相似度很低，应拆成不同的 P 编号。
+    """
+    a = [x for x in a if x != "·"]
+    b = [x for x in b if x != "·"]
+    if not a or not b:
+        return 0.0
+    n = min(len(a), len(b))
+    hits = sum(1 for i in range(n) if a[i] == b[i])
+    return hits / max(len(a), len(b))
 
 
 def _print_progressions(
