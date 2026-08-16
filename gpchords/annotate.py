@@ -1844,11 +1844,10 @@ def _detect_progressions(
         # 完全一致也不带 '，有变体（和弦进行不同）则在 P 后加 '（P1'），
         # 谱面上直接区分"原样重复"和"变体重复"。
         # 弱起/休止小节没有罗马数字时，把标注锚点顺移到该遍第一个有和弦
-        # 的小节，避免控制台显示“第 1 小节”但文件里写不进去。
-        ref_anchor = _first_roman_bar(bar_all_romans, f.occurrences[0][0], f.period)
-        if ref_anchor is None:
-            continue
-        reference = _region_label(f.id, bar_all_romans, ref_anchor, f.period)
+        # 的小节（仅移动“写在哪”，不改变循环网格/不改变该遍描述的范围）。
+        # 这样第 1 个标签会写到第 2 小节，但它描述的仍是第 1-4 小节的
+        # 原始循环，避免和第 2 个循环遍（第 5 小节起）内容重叠。
+        reference = _region_label(f.id, bar_all_romans, f.occurrences[0][0], f.period)
         for start, end in f.occurrences:
             # 每个循环遍的起点都标（region 连续运行内每一遍），
             # 标注内容是该遍实际进行的完整罗马数字（变体遍直接可见）。
@@ -1856,7 +1855,7 @@ def _detect_progressions(
                 anchor = _first_roman_bar(bar_all_romans, s, f.period)
                 if anchor is None:
                     continue
-                label = _region_label(f.id, bar_all_romans, anchor, f.period)
+                label = _region_label(f.id, bar_all_romans, s, f.period)
                 if label != reference and ": " in label:
                     fid, _, body = label.partition(": ")
                     label = f"{fid}': {body}"
@@ -1872,7 +1871,7 @@ def _detect_progressions(
             "copies": f.copies,
             "coverage": f.coverage,
             "regions": [
-                {"start": anchor, "end": anchor + f.period - 1, "label": labels[anchor]}
+                {"start": anchor, "end": s + f.period - 1, "label": labels[anchor]}
                 for region_start, region_end in f.occurrences
                 for s in range(region_start, region_end + 1, f.period)
                 for anchor in [_first_roman_bar(bar_all_romans, s, f.period)]

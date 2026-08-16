@@ -155,16 +155,18 @@ def test_detect_progressions_pickup_bar_anchor_shift():
     assert families[0].occurrences == [(1, 24)]
     # 第 1 小节没有罗马数字，不能作为标注锚点
     assert 1 not in labels
-    # 标注顺移到第 2 小节，且是完整的 4 项进行
-    assert labels[2] == "P1: IV-vi-IV-vi7"
+    # 标注顺移到第 2 小节；它描述的仍是第 1-4 小节的原始循环，
+    # 因此第 1 小节用 · 占位，且是完整的 4 项进行
+    assert labels[2] == "P1: ·-IV-vi-IV"
     assert len(labels[2].split(": ", 1)[1].split("-")) == 4
     assert romans[2] == "IV"
     # 后续循环遍仍按各自的起点标注变体
     assert labels[5] == "P1': vi7-IV-vi-IV"
     assert labels[9] == "P1': vi-IV-vi-IV"
     assert labels[13] == "P1': I-IV-vi-IV"
-    # payload 的 region start 也使用实际可写的锚点小节
+    # payload 的 region start 也使用实际可写的锚点小节，end 仍是该遍原始范围
     assert [r["start"] for r in payload[0]["regions"]] == [2, 5, 9, 13, 17, 21]
+    assert [r["end"] for r in payload[0]["regions"]] == [4, 8, 12, 16, 20, 24]
     assert all(len(r["label"].split(": ", 1)[1].split("-")) == 4 for r in payload[0]["regions"])
 
 
