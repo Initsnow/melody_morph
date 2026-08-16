@@ -126,6 +126,78 @@ def test_wildcard_rest_measures():
     assert find_loop_families(seq) == []
 
 
+def test_detect_progressions_pickup_bar_anchor_shift():
+    """弱起小节（第 1 小节无和弦）不应产生残缺/写不进去的 P 标注。
+
+    回归：P 标签应从第 1 个有和弦的小节开始（第 2 小节），并且 4 小节
+    循环的标注长度必须是 4 个罗马数字，而不是只有 3 个。
+    """
+    def res(bar, c):
+        return {"bar": bar, "chord": c, "key_root": 0, "key_mode": "Major"}
+
+    C = chord("C", 0, "maj")
+    F = chord("F", 5, "maj")
+    Am = chord("Am", 9, "min")
+    Am7 = chord("Am7", 9, "m7")
+    # 第 1 小节是休止/无和弦；从第 2 小节起是一个 4 小节循环的变体重复
+    seq = [
+        (2, F), (3, Am), (4, F), (5, Am7),
+        (6, F), (7, Am), (8, F), (9, Am),
+        (10, F), (11, Am), (12, F), (13, C),
+        (14, F), (15, Am), (16, F), (17, C),
+        (18, F), (19, Am), (20, F), (21, C),
+        (22, F), (23, Am), (24, F),
+    ]
+    results = [res(bar, c) for bar, c in seq]
+    families, labels, romans, payload = _detect_progressions(results)
+
+    assert len(families) == 1
+    assert families[0].occurrences == [(1, 24)]
+    # 第 1 小节没有罗马数字，不能作为标注锚点
+    assert 1 not in labels
+    # 标注顺移到第 2 小节，且是完整的 4 项进行
+    assert labels[2] == "P1: IV-vi-IV-vi7"
+    assert len(labels[2].split(": ", 1)[1].split("-")) == 4
+    assert romans[2] == "IV"
+    # 后续循环遍仍按各自的起点标注变体
+    assert labels[5] == "P1': vi7-IV-vi-IV"
+    assert labels[9] == "P1': vi-IV-vi-IV"
+    assert labels[13] == "P1': I-IV-vi-IV"
+    # payload 的 region start 也使用实际可写的锚点小节
+    assert [r["start"] for r in payload[0]["regions"]] == [2, 5, 9, 13, 17, 21]
+    assert all(len(r["label"].split(": ", 1)[1].split("-")) == 4 for r in payload[0]["regions"])
+
+
+def test_detect_progressions_label_includes_all_chord_changes():
+    """P 进行标注应包含小节内的全部和弦变化，而不是每小节只取第一个。
+
+    回归：4 小节循环，每小节 2 个和弦，标注应为
+    ``IV-V-vi-I-IV-V-I-V``，与谱面实际和弦一一对应。
+    """
+    def res(bar, c):
+        return {"bar": bar, "chord": c, "key_root": 0, "key_mode": "Major"}
+
+    F = chord("F", 5, "maj")
+    G = chord("G", 7, "maj")
+    Am = chord("Am", 9, "min")
+    C = chord("C", 0, "maj")
+    # 每小节两个和弦：IV-V | vi-I | IV-V | I-V，重复两遍
+    seq = [
+        (1, F), (1, G), (2, Am), (2, C),
+        (3, F), (3, G), (4, C), (4, G),
+        (5, F), (5, G), (6, Am), (6, C),
+        (7, F), (7, G), (8, C), (8, G),
+    ]
+    results = [res(bar, c) for bar, c in seq]
+    families, labels, romans, payload = _detect_progressions(results)
+
+    assert len(families) == 1
+    assert labels[1] == "P1: IV-V-vi-I-IV-V-I-V"
+    assert labels[5] == "P1: IV-V-vi-I-IV-V-I-V"
+    assert romans[1] == "IV"
+    assert payload[0]["regions"][0]["label"] == "P1: IV-V-vi-I-IV-V-I-V"
+
+
 def test_detect_progressions_region_labels():
     """每个循环遍的起点都标该遍实际进行的完整罗马数字（含品质）；
     与第一次出现的那遍完全一致仍标 P1，有变体则标 P1'。"""

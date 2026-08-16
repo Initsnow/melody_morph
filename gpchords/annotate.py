@@ -1836,24 +1836,33 @@ def _detect_progressions(
         tokens.append(tok)
     families = find_loop_families(tokens)
     bar_romans = _bar_romans(results)
+    bar_all_romans = _bar_all_romans(results)
     labels: dict[int, str] = {}
     romans: dict[int, str] = {}
     for f in families:
         # 第一次出现的那遍是参照（P1，不带 '）；后续遍实际进行与它
         # 完全一致也不带 '，有变体（和弦进行不同）则在 P 后加 '（P1'），
         # 谱面上直接区分"原样重复"和"变体重复"。
-        reference = _region_label(f.id, bar_romans, f.occurrences[0][0], f.period)
+        # 弱起/休止小节没有罗马数字时，把标注锚点顺移到该遍第一个有和弦
+        # 的小节，避免控制台显示“第 1 小节”但文件里写不进去。
+        ref_anchor = _first_roman_bar(bar_all_romans, f.occurrences[0][0], f.period)
+        if ref_anchor is None:
+            continue
+        reference = _region_label(f.id, bar_all_romans, ref_anchor, f.period)
         for start, end in f.occurrences:
             # 每个循环遍的起点都标（region 连续运行内每一遍），
             # 标注内容是该遍实际进行的完整罗马数字（变体遍直接可见）。
             for s in range(start, end + 1, f.period):
-                label = _region_label(f.id, bar_romans, s, f.period)
+                anchor = _first_roman_bar(bar_all_romans, s, f.period)
+                if anchor is None:
+                    continue
+                label = _region_label(f.id, bar_all_romans, anchor, f.period)
                 if label != reference and ": " in label:
                     fid, _, body = label.partition(": ")
                     label = f"{fid}': {body}"
-                labels.setdefault(s, label)
-                if s not in romans and bar_romans.get(s):
-                    romans[s] = bar_romans[s]
+                labels.setdefault(anchor, label)
+                if anchor not in romans and bar_romans.get(anchor):
+                    romans[anchor] = bar_romans[anchor]
     payload = [
         {
             "id": f.id,
@@ -1863,9 +1872,11 @@ def _detect_progressions(
             "copies": f.copies,
             "coverage": f.coverage,
             "regions": [
-                {"start": s, "end": s + f.period - 1, "label": labels[s]}
+                {"start": anchor, "end": anchor + f.period - 1, "label": labels[anchor]}
                 for region_start, region_end in f.occurrences
                 for s in range(region_start, region_end + 1, f.period)
+                for anchor in [_first_roman_bar(bar_all_romans, s, f.period)]
+                if anchor is not None
             ],
         }
         for f in families
@@ -1874,7 +1885,7 @@ def _detect_progressions(
 
 
 def _bar_romans(results: list[dict]) -> dict[int, str]:
-    """每小节第一个有和弦窗口的完整罗马数字（含品质），供 region 级标注。"""
+    """每小节第一个有和弦窗口的完整罗马数字（含品质），供单拍罗马注解用。"""
     romans: dict[int, str] = {}
     for r in results:
         if r["chord"] and r["bar"] not in romans:
@@ -1884,8 +1895,40 @@ def _bar_romans(results: list[dict]) -> dict[int, str]:
     return romans
 
 
+def _bar_all_romans(results: list[dict]) -> dict[int, list[str]]:
+    """每小节全部和弦变化的完整罗马数字（含品质），供 P 进行标注用。
+
+    同一小节内连续重复的同一罗马数字会折叠，避免把每个扫弦都写进
+    进行标注；但同一小节内真实的和弦变化（如 IV-V）会全部保留。
+    """
+    romans: dict[int, list[str]] = defaultdict(list)
+    for r in results:
+        if r["chord"]:
+            roman = chord_to_roman(r["chord"], r["key_root"], r["key_mode"])
+            if not romans[r["bar"]] or romans[r["bar"]][-1] != roman:
+                romans[r["bar"]].append(roman)
+    return dict(romans)
+
+
+def _first_roman_bar(
+    bar_romans: dict[int, str] | dict[int, list[str]], start: int, period: int
+) -> Optional[int]:
+    """返回循环遍 [start, start+period) 内第一个有罗马数字的小节。
+
+    弱起/前奏休止小节没有和弦时，标注应顺移到这个真正有和弦的小节，
+    否则写回时会因小节内没有音符拍而被静默丢弃。
+    """
+    for bar in range(start, start + period):
+        if bar in bar_romans:
+            return bar
+    return None
+
+
 def _region_label(
-    family_id: str, bar_romans: dict[int, str], start: int, period: int
+    family_id: str,
+    bar_romans: dict[int, str] | dict[int, list[str]],
+    start: int,
+    period: int,
 ) -> str:
     """循环遍起点标注：该遍循环的完整罗马数字（含品质）。
 
@@ -1894,13 +1937,22 @@ def _region_label(
     顶替）。变体遍的 id 由调用方加 ``'``（``P1'``），与第一次出现的
     那遍区分。遍内与检测模板有出入时以该遍实际罗马数字为准（region
     的检测容差本就允许轻微变体，标注描述的是该遍起点的实际进行）。
+
+    传入的 ``bar_romans`` 可以是每小节一个罗马数字（旧行为），也可以是
+    每小节多个罗马数字（``_bar_all_romans`` 的结果）。没有罗马数字的
+    小节用 ``·`` 占位，避免出现“4 小节循环却只写了 3 个和弦”的残缺标注。
     """
-    parts = [
-        bar_romans[bar]
-        for bar in range(start, start + period)
-        if bar in bar_romans
-    ]
-    if not parts:
+    parts: list[str] = []
+    for bar in range(start, start + period):
+        if bar in bar_romans:
+            value = bar_romans[bar]
+            if isinstance(value, list):
+                parts.extend(value)
+            else:
+                parts.append(value)
+        else:
+            parts.append("·")
+    if not any(part != "·" for part in parts):
         return family_id
     return f"{family_id}: {'-'.join(parts)}"
 
@@ -1916,9 +1968,16 @@ def _print_progressions(
         for start, end in f.occurrences:
             copies = (end - start + 1) // f.period
             for s in range(start, end + 1, f.period):
-                label = labels.get(s) or loop_label(f)
+                # 弱起/休止小节可能没有可写标注，顺移到该遍第一个有标签的小节
+                anchor = next(
+                    (k for k in range(s, s + f.period) if k in labels),
+                    None,
+                )
+                if anchor is None:
+                    continue
+                label = labels.get(anchor) or loop_label(f)
                 print(
-                    f"  {label}  （{f.period} 小节循环，第 {s} 小节，"
+                    f"  {label}  （{f.period} 小节循环，第 {anchor} 小节，"
                     f"该 region 第 {(s - start) // f.period + 1}/{copies} 遍）"
                 )
 
